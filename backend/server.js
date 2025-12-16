@@ -1,31 +1,33 @@
-const express = require('express');
-const mysql = require('mysql2'); 
+// backend/server.js
+require("dotenv").config(); // Đọc file .env
+
+const express = require("express");
+const cors = require("cors");
 
 const app = express();
-const port = 9999;
+const PORT = process.env.PORT || 9999;
 
-// 2. Tạo kết nối
-const db = mysql.createConnection({
-  host: 'localhost',      // Địa chỉ
-  user: 'root',           // Tên đăng nhập XAMPP
-  password: '',           // Mật khẩu XAMPP
-  database: 'quanlykhachsan' // Tên database 
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Kết nối DB
+require("./config/db");
+
+// ==== ROUTES ====
+const authRoutes = require("./routes/authRoutes");
+const phongRoutes = require("./routes/phongRoutes");
+const loaiphongRoutes = require("./routes/loaiphongRoutes");
+// ==== SỬ DỤNG ROUTES ====
+app.use("/api/auth", authRoutes);
+app.use("/api/phong", phongRoutes);
+app.use("/api/loaiphong", loaiphongRoutes);
+// Test API
+app.get("/api/test", (req, res) => {
+  res.json({ message: "Backend đang chạy!" });
 });
 
-// 3. Thử kết nối
-db.connect((err) => {
-  if (err) {
-    console.error('LỖI KẾT NỐI DATABASE:', err);
-    return;
-  }
-  console.log('✅ Đã kết nối thành công tới MySQL (XAMPP)');
-});
-
-// Một API test đơn giản
-app.get('/api/test', (req, res) => {
-  res.json({ message: 'Backend đang chạy!' });
-});
-
-app.listen(port, () => {
-  console.log(`Backend server đang chạy tại http://localhost:${port}`);
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Server chạy tại http://localhost:${PORT}`);
 });
