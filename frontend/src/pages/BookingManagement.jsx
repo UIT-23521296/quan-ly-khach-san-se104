@@ -125,6 +125,134 @@ const BookingManagement = () => {
     return `${day}/${month}/${year}`;
   };
 
+  const getTrangThai = (booking) => {
+    // Nếu có trạng thái từ API thì dùng, không thì tự tính
+    if (booking.TrangThai) {
+      return booking.TrangThai;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const ngayBatDau = new Date(booking.NgayBatDauThue);
+    ngayBatDau.setHours(0, 0, 0, 0);
+
+    const ngayTra = new Date(booking.NgayDuKienTra);
+    ngayTra.setHours(0, 0, 0, 0);
+
+    if (today < ngayBatDau) {
+      return "CHUA_CHECKIN";
+    } else if (today >= ngayBatDau && today <= ngayTra) {
+      return "DANG_THUE";
+    } else {
+      return "DA_TRA";
+    }
+  };
+
+  const renderTrangThai = (trangThai) => {
+    const statusMap = {
+      CHUA_CHECKIN: { icon: "🟡", text: "Chưa check-in", color: "#f59e0b" },
+      DANG_THUE: { icon: "🟢", text: "Đang thuê", color: "#10b981" },
+      DA_TRA: { icon: "🔵", text: "Đã trả phòng", color: "#3b82f6" },
+      DA_THANH_TOAN: { icon: "✅", text: "Đã thanh toán", color: "#8b5cf6" },
+      DA_HUY: { icon: "🔴", text: "Đã hủy", color: "#ef4444" },
+    };
+
+    const status = statusMap[trangThai] || statusMap.DANG_THUE;
+
+    return (
+      <span
+        style={{
+          ...styles.statusBadge,
+          background: `${status.color}20`,
+          color: status.color,
+          border: `1px solid ${status.color}40`,
+        }}
+      >
+        {status.icon} {status.text}
+      </span>
+    );
+  };
+
+  /* =====================
+     ACTIONS HANDLER
+  ===================== */
+  const handleViewDetail = (booking) => {
+    alert(`Xem chi tiết phiếu: ${booking.SoPhieu}`);
+    // TODO: Mở modal hiển thị chi tiết
+  };
+
+  const handleEdit = (booking) => {
+    const trangThai = getTrangThai(booking);
+    if (trangThai === "DA_THANH_TOAN") {
+      alert("❌ Không thể sửa phiếu đã thanh toán");
+      return;
+    }
+    alert(`Sửa phiếu: ${booking.SoPhieu}`);
+    // TODO: Mở modal chỉnh sửa
+  };
+
+  const handleDelete = async (booking) => {
+    const trangThai = getTrangThai(booking);
+    if (trangThai === "DA_THANH_TOAN") {
+      alert("❌ Không thể xóa phiếu đã thanh toán");
+      return;
+    }
+
+    if (!window.confirm(`Bạn có chắc muốn xóa phiếu ${booking.SoPhieu}?`)) {
+      return;
+    }
+
+    try {
+      await api.delete(`/phieuthue/${booking.SoPhieu}`);
+      alert("✅ Xóa phiếu thành công");
+      fetchBookings();
+      fetchRooms();
+    } catch (err) {
+      alert("❌ " + (err.response?.data?.message || "Lỗi xóa phiếu"));
+    }
+  };
+
+  const handleCancel = async (booking) => {
+    const trangThai = getTrangThai(booking);
+    if (trangThai === "DA_THANH_TOAN") {
+      alert("❌ Không thể hủy phiếu đã thanh toán");
+      return;
+    }
+
+    if (trangThai === "DA_HUY") {
+      alert("ℹ️ Phiếu này đã được hủy trước đó");
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Bạn có chắc muốn HỦY phiếu ${booking.SoPhieu}?\n\nPhiếu sẽ không bị xóa nhưng sẽ đánh dấu là "Đã hủy" để lưu lịch sử.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await api.put(`/phieuthue/${booking.SoPhieu}/huy`);
+      alert("✅ Hủy phiếu thành công");
+      fetchBookings();
+      fetchRooms();
+    } catch (err) {
+      alert("❌ " + (err.response?.data?.message || "Lỗi hủy phiếu"));
+    }
+  };
+
+  const handlePayment = (booking) => {
+    const trangThai = getTrangThai(booking);
+    if (trangThai === "DA_THANH_TOAN") {
+      alert("✅ Phiếu này đã được thanh toán");
+      return;
+    }
+    alert(`Thanh toán phiếu: ${booking.SoPhieu}`);
+    // TODO: Chuyển đến trang thanh toán/tạo hóa đơn
+  };
+
   /* =====================
      RENDER
   ===================== */
@@ -154,6 +282,8 @@ const BookingManagement = () => {
                 <th style={styles.th}>Khách hàng</th>
                 <th style={styles.th}>Ngày thuê</th>
                 <th style={styles.th}>Ngày trả dự kiến</th>
+                <th style={styles.th}>Trạng thái</th>
+                <th style={styles.th}>Thao tác</th>
               </tr>
             </thead>
             <tbody>
@@ -166,52 +296,117 @@ const BookingManagement = () => {
                   }
                   return acc;
                 }, {})
-              ).map((b, idx) => (
-                <tr
-                  key={b.SoPhieu}
-                  style={{
-                    ...styles.tableRow,
-                    background: idx % 2 === 0 ? "#f8fafc" : "#ffffff",
-                  }}
-                >
-                  <td style={styles.td}>
-                    <span style={styles.badge}>{b.SoPhieu}</span>
-                  </td>
-                  <td style={styles.td}>
-                    <strong style={styles.roomName}>{b.TenPhong}</strong>
-                  </td>
-                  <td style={styles.td}>
-                    <div>
-                      {b.khachList.map((khach, i) => (
-                        <div key={i} style={{ marginBottom: 4 }}>
-                          {khach}
-                        </div>
-                      ))}
-                      <span
-                        style={{
-                          color: "#94a3b8",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          marginTop: 4,
-                          display: "block",
-                        }}
-                      >
-                        ({b.khachList.length} khách)
+              ).map((b, idx) => {
+                const trangThai = getTrangThai(b);
+                const isDisabled = trangThai === "DA_THANH_TOAN";
+
+                return (
+                  <tr
+                    key={b.SoPhieu}
+                    style={{
+                      ...styles.tableRow,
+                      background: idx % 2 === 0 ? "#f8fafc" : "#ffffff",
+                    }}
+                  >
+                    <td style={styles.td}>
+                      <span style={styles.badge}>{b.SoPhieu}</span>
+                    </td>
+                    <td style={styles.td}>
+                      <strong style={styles.roomName}>{b.TenPhong}</strong>
+                    </td>
+                    <td style={styles.td}>
+                      <div>
+                        {b.khachList.map((khach, i) => (
+                          <div key={i} style={{ marginBottom: 4 }}>
+                            {khach}
+                          </div>
+                        ))}
+                        <span
+                          style={{
+                            color: "#94a3b8",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            marginTop: 4,
+                            display: "block",
+                          }}
+                        >
+                          ({b.khachList.length} khách)
+                        </span>
+                      </div>
+                    </td>
+                    <td style={styles.td}>
+                      <span style={styles.date}>
+                        {formatDate(b.NgayBatDauThue)}
                       </span>
-                    </div>
-                  </td>
-                  <td style={styles.td}>
-                    <span style={styles.date}>
-                      {formatDate(b.NgayBatDauThue)}
-                    </span>
-                  </td>
-                  <td style={styles.td}>
-                    <span style={styles.date}>
-                      {formatDate(b.NgayDuKienTra)}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td style={styles.td}>
+                      <span style={styles.date}>
+                        {formatDate(b.NgayDuKienTra)}
+                      </span>
+                    </td>
+                    <td style={styles.td}>{renderTrangThai(trangThai)}</td>
+                    <td style={styles.tdActions}>
+                      <div style={styles.actionButtons}>
+                        <button
+                          style={styles.actionBtn}
+                          onClick={() => handleViewDetail(b)}
+                          title="Xem chi tiết"
+                        >
+                          👁️
+                        </button>
+                        <button
+                          style={{
+                            ...styles.actionBtn,
+                            ...(isDisabled ? styles.actionBtnDisabled : {}),
+                          }}
+                          onClick={() => handleEdit(b)}
+                          disabled={isDisabled}
+                          title="Sửa"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          style={{
+                            ...styles.actionBtn,
+                            background: "#fee2e2",
+                            ...(isDisabled ? styles.actionBtnDisabled : {}),
+                          }}
+                          onClick={() => handleCancel(b)}
+                          disabled={isDisabled}
+                          title="Hủy phiếu"
+                        >
+                          ❌
+                        </button>
+                        <button
+                          style={{
+                            ...styles.actionBtn,
+                            background: "#fef3c7",
+                            ...(isDisabled ? styles.actionBtnDisabled : {}),
+                          }}
+                          onClick={() => handleDelete(b)}
+                          disabled={isDisabled}
+                          title="Xóa"
+                        >
+                          🗑️
+                        </button>
+                        <button
+                          style={{
+                            ...styles.actionBtn,
+                            background:
+                              trangThai === "DA_THANH_TOAN"
+                                ? "#e0e7ff"
+                                : "#dcfce7",
+                          }}
+                          onClick={() => handlePayment(b)}
+                          title="Thanh toán"
+                        >
+                          💰
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -498,6 +693,42 @@ const styles = {
   date: {
     color: "#64748b",
     fontSize: 13,
+  },
+  statusBadge: {
+    padding: "6px 12px",
+    borderRadius: 20,
+    fontSize: 12,
+    fontWeight: 600,
+    display: "inline-block",
+    whiteSpace: "nowrap",
+  },
+  tdActions: {
+    padding: "16px 20px",
+    fontSize: 14,
+    color: "#334155",
+    borderBottom: "1px solid #e2e8f0",
+  },
+  actionButtons: {
+    display: "flex",
+    gap: 6,
+    justifyContent: "center",
+    flexWrap: "wrap",
+  },
+  actionBtn: {
+    background: "#f1f5f9",
+    border: "1px solid #e2e8f0",
+    borderRadius: 8,
+    padding: "6px 10px",
+    fontSize: 16,
+    cursor: "pointer",
+    transition: "all 0.2s ease",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actionBtnDisabled: {
+    opacity: 0.4,
+    cursor: "not-allowed",
   },
   overlay: {
     position: "fixed",
