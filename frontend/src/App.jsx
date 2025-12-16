@@ -11,6 +11,7 @@ import RoomManagement from "./pages/RoomManagement";
 import Navbar from "./components/Navbar";
 import Sidebar from "./components/Sidebar";
 import { useState } from "react";
+import BookingManagement from "./pages/BookingManagement";
 
 function PrivateLayout({ children }) {
   const token = localStorage.getItem("token");
@@ -60,6 +61,14 @@ function App() {
         />
 
         {/* Các trang còn lại bạn sẽ thêm sau */}
+        <Route
+          path="/phieuthue"
+          element={
+            <PrivateLayout>
+              <BookingManagement />
+            </PrivateLayout>
+          }
+        />
       </Routes>
     </Router>
   );

@@ -1,20 +1,22 @@
 const mysql = require("mysql2");
-require("dotenv").config();
 
-const db = mysql.createConnection({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port: process.env.DB_PORT || 3306,
+const pool = mysql.createPool({
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASS || "",
+  database: process.env.DB_NAME || "qlks",
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
 });
 
-db.connect((err) => {
+pool.getConnection((err, conn) => {
   if (err) {
     console.error("❌ Lỗi kết nối MySQL:", err);
-    return;
+  } else {
+    console.log("✅ Kết nối MySQL thành công!");
+    conn.release();
   }
-  console.log("✅ Kết nối MySQL thành công!");
 });
 
-module.exports = db;
+module.exports = pool;
