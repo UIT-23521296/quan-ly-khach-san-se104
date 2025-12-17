@@ -1,11 +1,22 @@
 const express = require("express");
 const router = express.Router();
-const phieuThueController = require("../controllers/phieuthueController");
 
-// Tạo phiếu thuê phòng
-router.post("/", phieuThueController.createPhieuThue);
+// ✅ Khai báo biến là "controller"
+const controller = require("../controllers/phieuthueController");
 
-// (tuỳ chọn) lấy danh sách phiếu thuê
-router.get("/", phieuThueController.getAllPhieuThue);
+// Lấy danh sách
+router.get("/", controller.getAllPhieuThue);
+
+// Tạo mới
+router.post("/", controller.createPhieuThue);
+
+// Cập nhật (Sửa)
+router.put("/:soPhieu", controller.updatePhieuThue);
+
+// Trả phòng
+router.put("/:soPhieu/checkout", controller.checkOut);
+
+// Hủy phiếu
+router.put("/:soPhieu/huy", controller.huyPhieu);
 
 module.exports = router;
