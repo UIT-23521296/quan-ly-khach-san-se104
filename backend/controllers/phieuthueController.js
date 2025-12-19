@@ -2,17 +2,34 @@ const phieuThueModel = require("../models/phieuthueModel");
 const db = require("../config/db");
 const { v4: uuidv4 } = require("uuid");
 
-// 1️⃣ TẠO PHIẾU (Mặc định: ĐANG THUÊ)
+// 1️⃣ TẠO PHIẾU
 exports.createPhieuThue = async (req, res) => {
   const { MaPhong, NgayBatDauThue, NgayDuKienTra, GhiChu, danhSachKhach } = req.body;
   const conn = await db.promise().getConnection();
 
   try {
     await conn.beginTransaction();
-    const SoPhieu = "PT" + Date.now();
 
-    // Insert Phiếu: Trạng thái luôn là DANG_THUE
-    await phieuThueModel.insertPhieuThue([SoPhieu, MaPhong, NgayBatDauThue, NgayDuKienTra, 'DANG_THUE', GhiChu || '']);
+    // --- BỔ SUNG: Lấy tên phòng hiện tại trước khi tạo phiếu ---
+    const [rooms] = await conn.query("SELECT TenPhong FROM phong WHERE MaPhong = ?", [MaPhong]);
+    if (rooms.length === 0) {
+        throw new Error("Phòng không tồn tại!");
+    }
+    const tenPhongSnapshot = rooms[0].TenPhong; // Đây là tên phòng tại thời điểm tạo
+    // ----------------------------------------------------------
+
+    const SoPhieu = "PT" + Date.now();
+    
+    // SỬA: Truyền thêm tenPhongSnapshot vào vị trí tham số thứ 3
+    await phieuThueModel.insertPhieuThue([
+        SoPhieu, 
+        MaPhong, 
+        tenPhongSnapshot, // <--- Lưu tên phòng vào đây
+        NgayBatDauThue, 
+        NgayDuKienTra, 
+        'DANG_THUE', 
+        GhiChu || ''
+    ]);
 
     // Insert Khách
     for (const k of danhSachKhach) {

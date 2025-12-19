@@ -14,4 +14,10 @@ router.put("/:id", phongController.updateRoom);
 // Xóa phòng
 router.delete("/:id", phongController.deleteRoom);
 
+// Chuyển trạng thái phòng (Bảo trì / Trống)
+router.put("/:id/maintenance", phongController.toggleMaintenance);
+
+// Ngưng / Kích hoạt kinh doanh
+router.put("/:id/business", phongController.toggleBusinessStatus); 
+
 module.exports = router;

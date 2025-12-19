@@ -18,8 +18,8 @@ exports.insertKhachHang = (data) => {
 exports.insertPhieuThue = (data) => {
   const sql = `
     INSERT INTO phieuthue
-    (SoPhieu, MaPhong, NgayBatDauThue, NgayDuKienTra, TrangThaiLuuTru, GhiChu)
-    VALUES (?, ?, ?, ?, ?, ?)
+    (SoPhieu, MaPhong, TenPhong_LuuTru, NgayBatDauThue, NgayDuKienTra, TrangThaiLuuTru, GhiChu)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `;
   return db.promise().query(sql, data);
 };
@@ -50,7 +50,7 @@ exports.getAll = () => {
     SELECT 
       pt.SoPhieu,
       pt.MaPhong,
-      p.TenPhong,
+      COALESCE(pt.TenPhong_LuuTru, p.TenPhong) AS TenPhong,
       pt.NgayBatDauThue,
       pt.NgayDuKienTra,
       pt.TrangThaiLuuTru,
