@@ -265,6 +265,15 @@ const BookingManagement = () => {
         }
     }
 
+    const ngayDen = new Date(form.NgayBatDauThue);
+    const ngayTra = new Date(form.NgayDuKienTra);
+    const today = new Date();
+    today.setHours(0,0,0,0); 
+
+    if (ngayTra <= ngayDen) {
+        return alert("❌ Ngày dự kiến trả phải SAU ngày bắt đầu thuê!");
+    }
+
     const currentCount = khachList.length;
     if (modalMode === "create") {
         if (currentCount > soKhachToiDa) {
@@ -712,7 +721,7 @@ const BookingManagement = () => {
                             </tbody>
                         </table>
 
-                        {/* 3. Input Tiền (Fix lỗi VND nhảy lung tung) */}
+                        {/* 3. Input Tiền*/}
                         <div style={{
                             background: '#f0f9ff', 
                             padding: '20px', 
@@ -723,15 +732,14 @@ const BookingManagement = () => {
                             <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
                                 <label style={{fontSize: '15px', fontWeight: 'bold', color: '#0369a1'}}>💵 KHÁCH ĐƯA:</label>
                                 
-                                {/* Wrapper input để định vị chữ VND */}
                                 <div style={{position: 'relative', width: '200px'}}>
                                     <input 
-                                        type="number" 
+                                        type="text"  
                                         autoFocus
                                         placeholder="0"
                                         style={{
                                             width: '100%',
-                                            padding: '10px 50px 10px 15px', // Padding phải chừa chỗ cho chữ VND
+                                            padding: '10px 50px 10px 15px',
                                             borderRadius: '8px', 
                                             border: '2px solid #0ea5e9', 
                                             fontSize: '18px', 
@@ -742,23 +750,25 @@ const BookingManagement = () => {
                                             boxSizing: 'border-box',
                                             background: '#fff'
                                         }}
-                                        value={tienKhachDua}
-                                        onChange={(e) => setTienKhachDua(e.target.value)}
+                                        // Hiển thị: Format số có dấu phẩy
+                                        value={tienKhachDua ? Number(tienKhachDua).toLocaleString('en-US') : ''}
+                                        
+                                        // Xử lý nhập: Xóa dấu phẩy trước khi lưu vào state
+                                        onChange={(e) => {
+                                            const rawValue = e.target.value.replace(/,/g, ''); // Xóa dấu phẩy
+                                            if (!isNaN(rawValue)) { // Chỉ nhận số
+                                                setTienKhachDua(rawValue);
+                                            }
+                                        }}
                                     />
-                                    {/* Chữ VND tuyệt đối theo khung cha */}
                                     <span style={{
-                                        position: 'absolute', 
-                                        right: '12px', // Cách lề phải 12px
-                                        top: '50%', 
-                                        transform: 'translateY(-50%)', // Căn giữa dọc
-                                        fontWeight: 'bold', 
-                                        color: '#94a3b8',
-                                        pointerEvents: 'none', // Cho phép bấm xuyên qua vào input
-                                        fontSize: '14px'
+                                        position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', 
+                                        fontWeight: 'bold', color: '#94a3b8', pointerEvents: 'none', fontSize: '14px'
                                     }}>VND</span>
                                 </div>
                             </div>
 
+                            {/* Phần hiển thị tiền thừa giữ nguyên, vì nó tính toán dựa trên state tienKhachDua (là số nguyên) */}
                             <div style={{marginTop: '15px', paddingTop: '15px', borderTop: '1px dashed #cbd5e1', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                                 <span style={{fontSize: '14px', fontWeight: '600', color: '#475569'}}>Tiền thừa trả lại:</span>
                                 <span style={{

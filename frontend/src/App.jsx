@@ -13,6 +13,8 @@ import Sidebar from "./components/Sidebar";
 import { useState } from "react";
 import BookingManagement from "./pages/BookingManagement";
 import InvoiceManagement from "./pages/InvoiceManagement";
+import RoomSearch from "./pages/RoomSearch";
+import ReportManagement from "./pages/ReportManagement";
 
 function PrivateLayout({ children }) {
   const token = localStorage.getItem("token");
@@ -76,6 +78,24 @@ function App() {
           element={
             <PrivateLayout>
               <InvoiceManagement />
+            </PrivateLayout>
+          }
+        />
+
+        <Route
+          path="/room-search"
+          element={
+            <PrivateLayout>
+              <RoomSearch />
+            </PrivateLayout>
+          }
+        />
+
+        <Route
+          path="/report"
+          element={
+            <PrivateLayout>
+              <ReportManagement />
             </PrivateLayout>
           }
         />

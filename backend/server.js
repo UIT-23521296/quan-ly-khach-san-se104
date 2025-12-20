@@ -22,6 +22,7 @@ const loaiphongRoutes = require("./routes/loaiphongRoutes");
 const phieuthueRoutes = require("./routes/phieuthueRoutes");
 const loaikhachRoutes = require("./routes/loaikhachRoutes");
 const hoadonRoutes = require("./routes/hoadonRoutes");
+const baocaoRoutes = require("./routes/baocaoRoutes");
 
 // ==== SỬ DỤNG ROUTES ====
 app.use("/api/auth", authRoutes);
@@ -31,6 +32,8 @@ app.use("/api/loaiphong", loaiphongRoutes);
 app.use("/api/phieuthue", phieuthueRoutes);
 app.use("/api/loaikhach", loaikhachRoutes);
 app.use("/api/hoadon", hoadonRoutes);
+app.use("/api/baocao", baocaoRoutes);
+
 // Test API
 app.get("/api/test", (req, res) => {
   res.json({ message: "Backend đang chạy!" });

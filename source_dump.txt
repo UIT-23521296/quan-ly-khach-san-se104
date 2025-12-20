@@ -13,6 +13,7 @@ quan-ly-khach-san-se104/
 │   │   └── db.js
 │   ├── controllers/
 │   │   ├── .gitkeep
+│   │   ├── baocaoController.js
 │   │   ├── hoadonController.js
 │   │   ├── loaikhachController.js
 │   │   ├── phieuthueController.js
@@ -32,6 +33,7 @@ quan-ly-khach-san-se104/
 │   ├── routes/
 │   │   ├── .gitkeep
 │   │   ├── authRoutes.js
+│   │   ├── baocaoRoutes.js
 │   │   ├── hoadonRoutes.js
 │   │   ├── loaikhachRoutes.js
 │   │   ├── loaiphongRoutes.js
@@ -61,7 +63,9 @@ quan-ly-khach-san-se104/
 │   │   │   ├── Dashboard.jsx
 │   │   │   ├── InvoiceManagement.jsx
 │   │   │   ├── Login.jsx
-│   │   │   └── RoomManagement.jsx
+│   │   │   ├── ReportManagement.jsx
+│   │   │   ├── RoomManagement.jsx
+│   │   │   └── RoomSearch.jsx
 │   │   ├── services/
 │   │   │   └── api.js
 │   │   ├── App.css
@@ -139,6 +143,7 @@ const loaiphongRoutes = require("./routes/loaiphongRoutes");
 const phieuthueRoutes = require("./routes/phieuthueRoutes");
 const loaikhachRoutes = require("./routes/loaikhachRoutes");
 const hoadonRoutes = require("./routes/hoadonRoutes");
+const baocaoRoutes = require("./routes/baocaoRoutes");
 
 // ==== SỬ DỤNG ROUTES ====
 app.use("/api/auth", authRoutes);
@@ -148,6 +153,8 @@ app.use("/api/loaiphong", loaiphongRoutes);
 app.use("/api/phieuthue", phieuthueRoutes);
 app.use("/api/loaikhach", loaikhachRoutes);
 app.use("/api/hoadon", hoadonRoutes);
+app.use("/api/baocao", baocaoRoutes);
+
 // Test API
 app.get("/api/test", (req, res) => {
   res.json({ message: "Backend đang chạy!" });
@@ -187,6 +194,53 @@ module.exports = pool;
 
 ```
 
+### backend\controllers\baocaoController.js
+```js
+// backend/controllers/baocaoController.js
+const db = require("../config/db");
+
+exports.getDoanhThuThang = async (req, res) => {
+  const { thang, nam } = req.query; // thang có thể undefined nếu chọn báo cáo năm
+
+  if (!nam) {
+    return res.status(400).json({ message: "Vui lòng chọn năm" });
+  }
+
+  try {
+    // Xây dựng điều kiện lọc động
+    let whereClause = "YEAR(hd.NgayLap) = ?";
+    let params = [nam];
+
+    // Nếu có tháng -> Thêm điều kiện tháng
+    if (thang && thang !== 'ALL') {
+        whereClause += " AND MONTH(hd.NgayLap) = ?";
+        params.push(thang);
+    }
+
+    const sql = `
+      SELECT 
+        lp.TenLoaiPhong,
+        COALESCE(SUM(thuc_te.ThanhTien), 0) as DoanhThu
+      FROM loaiphong lp
+      LEFT JOIN (
+          SELECT p.MaLoaiPhong, ct.ThanhTien
+          FROM ct_hoadon ct
+          JOIN hoadon hd ON ct.SoHoaDon = hd.SoHoaDon
+          JOIN phong p ON ct.MaPhong = p.MaPhong
+          WHERE ${whereClause}  -- <--- Điều kiện động ở đây
+      ) thuc_te ON lp.MaLoaiPhong = thuc_te.MaLoaiPhong
+      GROUP BY lp.MaLoaiPhong, lp.TenLoaiPhong
+    `;
+
+    const [rows] = await db.promise().query(sql, params);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Lỗi tính toán doanh thu" });
+  }
+};
+```
+
 ### backend\controllers\hoadonController.js
 ```js
 const db = require("../config/db");
@@ -197,7 +251,7 @@ const { v4: uuidv4 } = require("uuid");
 const calculateBill = async (soPhieu) => {
     // 1. Lấy thông tin phiếu, phòng, đơn giá
     const sqlBase = `
-        SELECT pt.SoPhieu, pt.MaPhong, pt.NgayBatDauThue, 
+        SELECT pt.SoPhieu, pt.MaPhong, pt.NgayBatDauThue, pt.NgayDuKienTra, 
                p.TenPhong, lp.DonGia, lp.TenLoaiPhong,
                (SELECT HoTen FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as TenKhachDaiDien,
                (SELECT DiaChi FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as DiaChi
@@ -206,11 +260,12 @@ const calculateBill = async (soPhieu) => {
         JOIN loaiphong lp ON p.MaLoaiPhong = lp.MaLoaiPhong
         WHERE pt.SoPhieu = ?
     `;
+    
     const [rows] = await db.promise().query(sqlBase, [soPhieu]);
     if (rows.length === 0) throw new Error("Phiếu thuê không tồn tại");
     const data = rows[0];
 
-    // 2. Lấy danh sách khách để đếm số lượng và check quốc tịch
+    // 2. Lấy danh sách khách... 
     const sqlKhach = `
         SELECT lk.MaLoaiKhach, lk.HeSoPhuThu 
         FROM ct_phieuthue ct
@@ -221,24 +276,29 @@ const calculateBill = async (soPhieu) => {
     const [dsKhach] = await db.promise().query(sqlKhach, [soPhieu]);
     const soLuongKhach = dsKhach.length;
 
-    // 3. Xử lý logic tính số ngày (Nếu đi trong ngày tính là 1 ngày)
+    // 3. Xử lý logic tính số ngày
     const ngayBatDau = new Date(data.NgayBatDauThue);
-    const ngayKetThuc = new Date(); // Tính đến giờ hiện tại
-    let soNgay = Math.ceil((ngayKetThuc - ngayBatDau) / (1000 * 60 * 60 * 24));
-    if (soNgay <= 0) soNgay = 1;
-
-    // 4. LOGIC LINH HOẠT:
     
-    // A. Hệ Số Khách Nước Ngoài (Lấy hệ số lớn nhất trong đám khách)
-    // Ví dụ: Có 1 khách NN (1.5) và 2 khách Nội địa (1.0) -> Hệ số chung là 1.5
+    // Nếu data.NgayDuKienTra bị null (lỗi dữ liệu cũ) thì lấy ngày hiện tại
+    const ngayKetThuc = data.NgayDuKienTra ? new Date(data.NgayDuKienTra) : new Date(); 
+
+    // Tính số mili-giây chênh lệch
+    const diffTime = Math.abs(ngayKetThuc - ngayBatDau);
+    // Chuyển sang ngày (làm tròn lên)
+    let soNgay = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (soNgay <= 0) soNgay = 1; // Ở chưa được 1 ngày thì tính là 1 ngày
+
+    // 4. LOGIC LINH HOẠT
+    
+    // A. Hệ Số Khách Nước Ngoài
     let heSoKhach = 1.0;
     if (dsKhach.length > 0) {
         heSoKhach = Math.max(...dsKhach.map(k => k.HeSoPhuThu));
     }
 
-    // B. Phụ thu số lượng khách (Tra cứu bảng tilephuthu)
+    // B. Phụ thu số lượng khách
     let tiLePhuThu = 0;
-    // Tìm tỉ lệ ứng với số khách hiện tại
     const [resTiLe] = await db.promise().query(
         "SELECT TiLePhuThu FROM tilephuthu WHERE KhachThu = ?", 
         [soLuongKhach]
@@ -247,7 +307,6 @@ const calculateBill = async (soPhieu) => {
     if (resTiLe.length > 0) {
         tiLePhuThu = resTiLe[0].TiLePhuThu;
     } else {
-        // Fallback: Nếu số khách lớn hơn dữ liệu trong bảng (vd 5 khách), lấy mức cao nhất
         const [maxTiLe] = await db.promise().query("SELECT TiLePhuThu FROM tilephuthu ORDER BY KhachThu DESC LIMIT 1");
         if (maxTiLe.length > 0 && soLuongKhach > 2) {
              tiLePhuThu = maxTiLe[0].TiLePhuThu; 
@@ -255,7 +314,6 @@ const calculateBill = async (soPhieu) => {
     }
 
     // 5. TÍNH TỔNG TIỀN
-    // Công thức: (Đơn giá * Số ngày * (1 + Tỉ lệ phụ thu)) * Hệ số khách
     const donGia = parseFloat(data.DonGia);
     const thanhTien = (donGia * soNgay * (1 + tiLePhuThu)) * heSoKhach;
 
@@ -869,10 +927,25 @@ const db = require("../config/db");
 
 exports.getAll = () => {
   const sql = `
-    SELECT p.*, lp.TenLoaiPhong, lp.DonGia,
-    (EXISTS (SELECT 1 FROM phieuthue pt WHERE pt.MaPhong = p.MaPhong)) as CoLichSu
+    SELECT 
+        p.*, 
+        lp.TenLoaiPhong, 
+        lp.DonGia,
+        pt.NgayBatDauThue,
+        pt.NgayDuKienTra,
+        (SELECT kh.HoTen 
+         FROM khachhang kh 
+         JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH 
+         WHERE ct.SoPhieu = pt.SoPhieu 
+         LIMIT 1) AS TenKhach,
+        (SELECT kh.SDT 
+         FROM khachhang kh 
+         JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH 
+         WHERE ct.SoPhieu = pt.SoPhieu 
+         LIMIT 1) AS SDTKhach
     FROM PHONG p
     JOIN LOAIPHONG lp ON p.MaLoaiPhong = lp.MaLoaiPhong
+    LEFT JOIN PHIEUTHUE pt ON p.MaPhong = pt.MaPhong AND pt.TrangThaiLuuTru = 'DANG_THUE'
   `;
   return db.promise().query(sql);
 };
@@ -1005,6 +1078,17 @@ router.post("/create", async (req, res) => {
 
 module.exports = router;
 
+```
+
+### backend\routes\baocaoRoutes.js
+```js
+const express = require("express");
+const router = express.Router();
+const controller = require("../controllers/baocaoController");
+
+router.get("/doanhthu", controller.getDoanhThuThang);
+
+module.exports = router;
 ```
 
 ### backend\routes\hoadonRoutes.js
@@ -1223,6 +1307,8 @@ import Sidebar from "./components/Sidebar";
 import { useState } from "react";
 import BookingManagement from "./pages/BookingManagement";
 import InvoiceManagement from "./pages/InvoiceManagement";
+import RoomSearch from "./pages/RoomSearch";
+import ReportManagement from "./pages/ReportManagement";
 
 function PrivateLayout({ children }) {
   const token = localStorage.getItem("token");
@@ -1286,6 +1372,24 @@ function App() {
           element={
             <PrivateLayout>
               <InvoiceManagement />
+            </PrivateLayout>
+          }
+        />
+
+        <Route
+          path="/room-search"
+          element={
+            <PrivateLayout>
+              <RoomSearch />
+            </PrivateLayout>
+          }
+        />
+
+        <Route
+          path="/report"
+          element={
+            <PrivateLayout>
+              <ReportManagement />
             </PrivateLayout>
           }
         />
@@ -1427,6 +1531,7 @@ const Sidebar = ({ activeMenu, setActiveMenu }) => {
 
   const menuItems = [
     { id: "dashboard", icon: "📊", label: "Tổng quan", path: "/" },
+    { id: "room-search", icon: "🔍", label: "Tra cứu phòng", path: "/room-search" },
     { id: "rooms", icon: "🛏️", label: "Danh mục phòng", path: "/rooms" },
     { id: "booking", icon: "📝", label: "Thuê phòng", path: "/phieuthue" },
     { id: "invoice", icon: "💵", label: "Hóa đơn", path: "/invoice" },
@@ -1750,6 +1855,15 @@ const BookingManagement = () => {
             alert(`❌ Khách hàng #${i + 1} chưa chọn Loại khách!`);
             return;
         }
+    }
+
+    const ngayDen = new Date(form.NgayBatDauThue);
+    const ngayTra = new Date(form.NgayDuKienTra);
+    const today = new Date();
+    today.setHours(0,0,0,0); 
+
+    if (ngayTra <= ngayDen) {
+        return alert("❌ Ngày dự kiến trả phải SAU ngày bắt đầu thuê!");
     }
 
     const currentCount = khachList.length;
@@ -2199,7 +2313,7 @@ const BookingManagement = () => {
                             </tbody>
                         </table>
 
-                        {/* 3. Input Tiền (Fix lỗi VND nhảy lung tung) */}
+                        {/* 3. Input Tiền*/}
                         <div style={{
                             background: '#f0f9ff', 
                             padding: '20px', 
@@ -2210,15 +2324,14 @@ const BookingManagement = () => {
                             <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
                                 <label style={{fontSize: '15px', fontWeight: 'bold', color: '#0369a1'}}>💵 KHÁCH ĐƯA:</label>
                                 
-                                {/* Wrapper input để định vị chữ VND */}
                                 <div style={{position: 'relative', width: '200px'}}>
                                     <input 
-                                        type="number" 
+                                        type="text"  
                                         autoFocus
                                         placeholder="0"
                                         style={{
                                             width: '100%',
-                                            padding: '10px 50px 10px 15px', // Padding phải chừa chỗ cho chữ VND
+                                            padding: '10px 50px 10px 15px',
                                             borderRadius: '8px', 
                                             border: '2px solid #0ea5e9', 
                                             fontSize: '18px', 
@@ -2229,23 +2342,25 @@ const BookingManagement = () => {
                                             boxSizing: 'border-box',
                                             background: '#fff'
                                         }}
-                                        value={tienKhachDua}
-                                        onChange={(e) => setTienKhachDua(e.target.value)}
+                                        // Hiển thị: Format số có dấu phẩy
+                                        value={tienKhachDua ? Number(tienKhachDua).toLocaleString('en-US') : ''}
+                                        
+                                        // Xử lý nhập: Xóa dấu phẩy trước khi lưu vào state
+                                        onChange={(e) => {
+                                            const rawValue = e.target.value.replace(/,/g, ''); // Xóa dấu phẩy
+                                            if (!isNaN(rawValue)) { // Chỉ nhận số
+                                                setTienKhachDua(rawValue);
+                                            }
+                                        }}
                                     />
-                                    {/* Chữ VND tuyệt đối theo khung cha */}
                                     <span style={{
-                                        position: 'absolute', 
-                                        right: '12px', // Cách lề phải 12px
-                                        top: '50%', 
-                                        transform: 'translateY(-50%)', // Căn giữa dọc
-                                        fontWeight: 'bold', 
-                                        color: '#94a3b8',
-                                        pointerEvents: 'none', // Cho phép bấm xuyên qua vào input
-                                        fontSize: '14px'
+                                        position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', 
+                                        fontWeight: 'bold', color: '#94a3b8', pointerEvents: 'none', fontSize: '14px'
                                     }}>VND</span>
                                 </div>
                             </div>
 
+                            {/* Phần hiển thị tiền thừa giữ nguyên, vì nó tính toán dựa trên state tienKhachDua (là số nguyên) */}
                             <div style={{marginTop: '15px', paddingTop: '15px', borderTop: '1px dashed #cbd5e1', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                                 <span style={{fontSize: '14px', fontWeight: '600', color: '#475569'}}>Tiền thừa trả lại:</span>
                                 <span style={{
@@ -2763,7 +2878,6 @@ const InvoiceManagement = () => {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(false);
   
-  // State cho Modal xem chi tiết
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -2783,7 +2897,6 @@ const InvoiceManagement = () => {
     }
   };
 
-  // Hàm xử lý khi bấm nút Xem
   const handleViewDetail = async (soHoaDon) => {
       try {
           const res = await api.get(`/hoadon/${soHoaDon}`);
@@ -2794,6 +2907,73 @@ const InvoiceManagement = () => {
       }
   };
 
+  // ✅ HÀM XỬ LÝ IN HÓA ĐƠN
+  const handlePrint = () => {
+    const printContent = document.getElementById("invoice-print-section");
+    const windowUrl = 'about:blank';
+    const uniqueName = new Date();
+    const windowName = 'Print' + uniqueName.getTime();
+    const printWindow = window.open(windowUrl, windowName, 'left=50000,top=50000,width=0,height=0');
+
+    // CSS cho trang in (Để đảm bảo in ra đẹp như hóa đơn thật)
+    const printStyles = `
+        <style>
+            body { font-family: 'Times New Roman', Times, serif; padding: 20px; color: #000; }
+            .header-print { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #000; padding-bottom: 10px; }
+            .header-print h1 { margin: 0; font-size: 24px; text-transform: uppercase; }
+            .header-print p { margin: 5px 0; font-size: 14px; }
+            
+            .info-grid { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 20px; font-size: 14px; }
+            .info-row { margin-bottom: 5px; }
+            
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px; }
+            th { border-bottom: 1px solid #000; padding: 8px; text-align: left; font-weight: bold; }
+            td { border-bottom: 1px dashed #ccc; padding: 8px; }
+            .text-right { text-align: right; }
+            .total-row td { border-top: 2px solid #000; border-bottom: none; font-weight: bold; font-size: 16px; padding-top: 15px; }
+            
+            .footer-print { margin-top: 40px; text-align: center; font-size: 14px; display: flex; justify-content: space-between; padding: 0 50px; }
+        </style>
+    `;
+
+    // Nội dung HTML để in
+    printWindow.document.write(`
+        <html>
+            <head>
+                <title>In Hóa Đơn ${selectedInvoice.SoHoaDon}</title>
+                ${printStyles}
+            </head>
+            <body>
+                <div class="header-print">
+                    <h1>Khách Sạn SE104</h1>
+                    <p>Địa chỉ: Khu phố 6, Linh Trung, Thủ Đức, TP.HCM</p>
+                    <p>Hotline: 0909 123 456</p>
+                </div>
+                
+                ${printContent.innerHTML}
+
+                <div class="footer-print">
+                    <div>
+                        <p>Khách hàng</p>
+                        <p style="margin-top: 40px; font-style: italic;">(Ký tên)</p>
+                    </div>
+                    <div>
+                        <p>Người lập phiếu</p>
+                        <p style="margin-top: 40px; font-style: italic;">(Ký tên)</p>
+                    </div>
+                </div>
+            </body>
+        </html>
+    `);
+    
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+        printWindow.print();
+        printWindow.close();
+    }, 250);
+  };
+
   return (
     <div style={styles.wrapper}>
       <h1 style={styles.title}>🧾 Quản lý Hóa đơn & Doanh thu</h1>
@@ -2801,7 +2981,6 @@ const InvoiceManagement = () => {
         {loading ? <p style={{padding: '20px'}}>⏳ Đang tải...</p> : (
         <table style={styles.table}>
             <thead>
-                {/* 👇 SỬA Ở ĐÂY: Dùng style.tableHeader giống trang Phiếu thuê */}
                 <tr style={styles.tableHeader}>
                     <th style={styles.th}>Số Hóa Đơn</th>
                     <th style={styles.th}>Phòng</th>
@@ -2852,7 +3031,7 @@ const InvoiceManagement = () => {
         )}
       </div>
 
-      {/* --- MODAL XEM CHI TIẾT HÓA ĐƠN (GIỮ NGUYÊN) --- */}
+      {/* --- MODAL XEM CHI TIẾT --- */}
       {isModalOpen && selectedInvoice && (
         <div style={styles.overlay} onClick={() => setIsModalOpen(false)}>
             <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -2864,85 +3043,95 @@ const InvoiceManagement = () => {
                 </div>
                 
                 <div style={{padding: '24px'}}>
-                    {/* Thông tin chung */}
-                    <div style={{background: '#fff', borderRadius: '8px', marginBottom: '20px', border: '1px solid #e2e8f0', display: 'grid', gridTemplateColumns: '1.5fr 1fr'}}>
-                        <div style={{padding: '16px', borderRight: '1px solid #e2e8f0'}}>
-                            <div style={{fontSize: '13px', color: '#64748b'}}>Phòng & Loại</div>
-                            <div style={{fontSize: '18px', fontWeight: 'bold', color: '#2563eb'}}>
-                                {selectedInvoice.TenPhong_LuuTru} 
-                                {selectedInvoice.TenLoaiPhong && <span style={{fontSize: '14px', color: '#475569', fontWeight: 'normal'}}> - {selectedInvoice.TenLoaiPhong}</span>}
+                    
+                    {/* 👇 KHU VỰC SẼ ĐƯỢC IN (Bao bọc bởi ID này) */}
+                    <div id="invoice-print-section">
+                        {/* Thông tin chung */}
+                        <div style={{background: '#fff', borderRadius: '8px', marginBottom: '20px', border: '1px solid #e2e8f0', display: 'grid', gridTemplateColumns: '1.5fr 1fr'}}>
+                            <div style={{padding: '16px', borderRight: '1px solid #e2e8f0'}}>
+                                <div style={{fontSize: '13px', color: '#64748b'}}>Phòng & Loại</div>
+                                <div style={{fontSize: '18px', fontWeight: 'bold', color: '#2563eb'}}>
+                                    {selectedInvoice.TenPhong_LuuTru} 
+                                    {selectedInvoice.TenLoaiPhong && <span style={{fontSize: '14px', color: '#475569', fontWeight: 'normal'}}> - {selectedInvoice.TenLoaiPhong}</span>}
+                                </div>
+                                <div style={{fontSize: '13px', color: '#64748b', marginTop: '8px'}}>Khách hàng</div>
+                                <div style={{fontWeight: '600', color: '#334155'}}>{selectedInvoice.TenKhachHangCoQuan}</div>
                             </div>
-                            <div style={{fontSize: '13px', color: '#64748b', marginTop: '8px'}}>Khách hàng</div>
-                            <div style={{fontWeight: '600', color: '#334155'}}>{selectedInvoice.TenKhachHangCoQuan}</div>
+                            <div style={{padding: '16px', background: '#f8fafc'}}>
+                                <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '5px'}}>
+                                    <span style={{color: '#64748b', fontSize: '13px'}}>Số HĐ:</span>
+                                    <strong>{selectedInvoice.SoHoaDon}</strong>
+                                </div>
+                                <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '5px'}}>
+                                    <span style={{color: '#64748b', fontSize: '13px'}}>Ngày lập:</span>
+                                    <strong>{new Date(selectedInvoice.NgayLap).toLocaleDateString('vi-VN')}</strong>
+                                </div>
+                                <div style={{display: 'flex', justifyContent: 'space-between'}}>
+                                    <span style={{color: '#64748b', fontSize: '13px'}}>Địa chỉ:</span>
+                                    <span style={{textAlign: 'right', fontSize: '13px'}}>{selectedInvoice.DiaChi || '---'}</span>
+                                </div>
+                            </div>
                         </div>
-                        <div style={{padding: '16px', background: '#f8fafc'}}>
-                            <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '5px'}}>
-                                <span style={{color: '#64748b', fontSize: '13px'}}>Số HĐ:</span>
-                                <strong>{selectedInvoice.SoHoaDon}</strong>
-                            </div>
-                            <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '5px'}}>
-                                <span style={{color: '#64748b', fontSize: '13px'}}>Ngày lập:</span>
-                                <strong>{new Date(selectedInvoice.NgayLap).toLocaleDateString('vi-VN')}</strong>
-                            </div>
-                            <div style={{display: 'flex', justifyContent: 'space-between'}}>
-                                <span style={{color: '#64748b', fontSize: '13px'}}>Địa chỉ:</span>
-                                <span style={{textAlign: 'right', fontSize: '13px'}}>{selectedInvoice.DiaChi || '---'}</span>
-                            </div>
-                        </div>
-                    </div>
 
-                    {/* Bảng tính tiền */}
-                    <table style={{width: '100%', marginBottom: '20px', borderCollapse: 'collapse', fontSize: '14px'}}>
-                        <thead>
-                            <tr style={{background: '#f1f5f9', color: '#475569', textTransform: 'uppercase', fontSize: '11px'}}>
-                                <th style={{padding: '10px', textAlign: 'left'}}>Khoản mục</th>
-                                <th style={{padding: '10px', textAlign: 'right'}}>Chi tiết</th>
-                                <th style={{padding: '10px', textAlign: 'right'}}>Thành tiền</th>
-                            </tr>
-                        </thead>
-                        <tbody style={{borderTop: '1px solid #e2e8f0'}}>
-                            <tr>
-                                <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>
-                                    <strong>Tiền thuê phòng</strong>
-                                    <div style={{fontSize: '12px', color: '#64748b'}}>Đơn giá: {Number(selectedInvoice.DonGia).toLocaleString()} đ</div>
-                                </td>
-                                <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>
-                                    {selectedInvoice.SoNgayThue} ngày
-                                </td>
-                                <td style={{padding: '12px', textAlign: 'right', fontWeight: 'bold', borderBottom: '1px dashed #e2e8f0'}}>
-                                    {Number(selectedInvoice.DonGia * selectedInvoice.SoNgayThue).toLocaleString()}
-                                </td>
-                            </tr>
-                            
-                            {selectedInvoice.PhuThu > 0 && (
-                                <tr style={{color: '#d97706', background: '#fffbeb'}}>
-                                    <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>Phụ thu quá tải ({selectedInvoice.SoKhach} khách)</td>
-                                    <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>+{selectedInvoice.PhuThu * 100}%</td>
-                                    <td style={{padding: '12px', textAlign: 'right', fontStyle: 'italic', borderBottom: '1px dashed #e2e8f0'}}>
-                                        (Hệ số {1 + selectedInvoice.PhuThu})
+                        {/* Bảng tính tiền */}
+                        <table style={{width: '100%', marginBottom: '20px', borderCollapse: 'collapse', fontSize: '14px'}}>
+                            <thead>
+                                <tr style={{background: '#f1f5f9', color: '#475569', textTransform: 'uppercase', fontSize: '11px'}}>
+                                    <th style={{padding: '10px', textAlign: 'left'}}>Khoản mục</th>
+                                    <th style={{padding: '10px', textAlign: 'right'}}>Chi tiết</th>
+                                    <th style={{padding: '10px', textAlign: 'right'}} className="text-right">Thành tiền</th>
+                                </tr>
+                            </thead>
+                            <tbody style={{borderTop: '1px solid #e2e8f0'}}>
+                                <tr>
+                                    <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>
+                                        <strong>Tiền thuê phòng</strong>
+                                        <div style={{fontSize: '12px', color: '#64748b'}}>Đơn giá: {Number(selectedInvoice.DonGia).toLocaleString()} đ</div>
+                                    </td>
+                                    <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>
+                                        {selectedInvoice.SoNgayThue} ngày
+                                    </td>
+                                    <td style={{padding: '12px', textAlign: 'right', fontWeight: 'bold', borderBottom: '1px dashed #e2e8f0'}} className="text-right">
+                                        {Number(selectedInvoice.DonGia * selectedInvoice.SoNgayThue).toLocaleString()}
                                     </td>
                                 </tr>
-                            )}
+                                
+                                {selectedInvoice.PhuThu > 0 && (
+                                    <tr style={{color: '#d97706'}}>
+                                        <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>Phụ thu quá tải ({selectedInvoice.SoKhach} khách)</td>
+                                        <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>+{selectedInvoice.PhuThu * 100}%</td>
+                                        <td style={{padding: '12px', textAlign: 'right', fontStyle: 'italic', borderBottom: '1px dashed #e2e8f0'}} className="text-right">
+                                            (Hệ số {1 + selectedInvoice.PhuThu})
+                                        </td>
+                                    </tr>
+                                )}
 
-                            {selectedInvoice.KhachNuocNgoai === 1 && (
-                                <tr style={{color: '#059669', background: '#f0fdf4'}}>
-                                    <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>Hệ số khách nước ngoài</td>
-                                    <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>x 1.5</td>
-                                    <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}></td>
+                                {selectedInvoice.KhachNuocNgoai === 1 && (
+                                    <tr style={{color: '#059669'}}>
+                                        <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>Hệ số khách nước ngoài</td>
+                                        <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>x 1.5</td>
+                                        <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}></td>
+                                    </tr>
+                                )}
+
+                                <tr style={{borderTop: '2px solid #334155'}} className="total-row">
+                                    <td style={{padding: '15px', fontWeight: 'bold', color: '#dc2626', fontSize: '16px'}} colSpan={2}>TỔNG TIỀN</td>
+                                    <td style={{padding: '15px', textAlign: 'right', fontWeight: 'bold', color: '#dc2626', fontSize: '18px'}} className="text-right">
+                                        {Number(selectedInvoice.TriGia).toLocaleString()} VND
+                                    </td>
                                 </tr>
-                            )}
+                            </tbody>
+                        </table>
+                    </div>
+                    {/* ☝️ KẾT THÚC KHU VỰC IN */}
 
-                            <tr style={{borderTop: '2px solid #334155'}}>
-                                <td style={{padding: '15px', fontWeight: 'bold', color: '#dc2626', fontSize: '16px'}} colSpan={2}>TỔNG TIỀN</td>
-                                <td style={{padding: '15px', textAlign: 'right', fontWeight: 'bold', color: '#dc2626', fontSize: '18px'}}>
-                                    {Number(selectedInvoice.TriGia).toLocaleString()} VND
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-
-                    <div style={{textAlign: 'right'}}>
+                    <div style={{display: 'flex', justifyContent: 'flex-end', gap: '10px'}}>
                         <button style={styles.cancelBtn} onClick={() => setIsModalOpen(false)}>Đóng</button>
+                        
+                        {/* 👇 NÚT IN MỚI THÊM */}
+                        <button style={styles.printBtn} onClick={handlePrint}>
+                            🖨️ In Hóa Đơn
+                        </button>
                     </div>
                 </div>
             </div>
@@ -2957,22 +3146,8 @@ const styles = {
   title: { fontSize: "2rem", fontWeight: "700", color: "#1F2A40", marginBottom: "2rem" },
   tableCard: { background: "white", borderRadius: "16px", boxShadow: "0 4px 20px rgba(0,0,0,0.05)", overflow: "hidden" },
   table: { width: "100%", borderCollapse: "collapse" },
-  
-  // 👇 SỬA STYLE TABLE HEADER CHO GIỐNG TRANG PHIẾU THUÊ
-  tableHeader: {
-    background: "#718096", // Màu xám đậm
-  },
-  th: {
-    padding: "16px 24px",
-    textAlign: "left",
-    color: "#fff", // Chữ trắng
-    fontWeight: "600",
-    fontSize: "14px",
-    textTransform: 'uppercase',
-    letterSpacing: "0.5px"
-  },
-  // -----------------------------------------------------
-
+  tableHeader: { background: "#718096" },
+  th: { padding: "16px 24px", textAlign: "left", color: "#fff", fontWeight: "600", fontSize: "14px", textTransform: 'uppercase', letterSpacing: "0.5px" },
   td: { padding: "16px 24px", borderBottom: "1px solid #f1f5f9", color: "#334155", fontSize: "14px" },
   tr: { transition: "0.2s" },
   badge: { background: "#e2e8f0", padding: "4px 8px", borderRadius: "6px", fontSize: "0.85rem", fontWeight: "600", color: "#475569" },
@@ -2993,6 +3168,18 @@ const styles = {
       boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
   },
   
+  // Style cho nút IN
+  printBtn: {
+      padding: "10px 24px",
+      background: "#3b82f6",
+      color: "white",
+      border: "none",
+      borderRadius: 8,
+      cursor: "pointer",
+      fontWeight: "600",
+      boxShadow: "0 4px 6px rgba(59, 130, 246, 0.4)"
+  },
+
   overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000, backdropFilter: "blur(4px)" },
   modal: { background: "#fff", borderRadius: 20, width: "90%", maxWidth: 650, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" },
   modalHeader: { display: "flex", justifyContent: "space-between", padding: "20px 24px", alignItems: 'center' },
@@ -3151,6 +3338,247 @@ export default Login;
 
 ```
 
+### frontend\src\pages\ReportManagement.jsx
+```jsx
+import React, { useState } from "react";
+import api from "../services/api";
+
+const ReportManagement = () => {
+  const [reportType, setReportType] = useState("month"); // 'month' hoặc 'year'
+  const [month, setMonth] = useState(new Date().getMonth() + 1);
+  const [year, setYear] = useState(new Date().getFullYear());
+  
+  const [reportData, setReportData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [totalRevenue, setTotalRevenue] = useState(0);
+
+  const handleCreateReport = async () => {
+    setLoading(true);
+    try {
+      // Nếu chọn năm thì không gửi param 'thang'
+      let url = `/baocao/doanhthu?nam=${year}`;
+      if (reportType === 'month') {
+          url += `&thang=${month}`;
+      }
+
+      const res = await api.get(url);
+      const data = res.data;
+
+      const total = data.reduce((sum, item) => sum + Number(item.DoanhThu), 0);
+      setTotalRevenue(total);
+      setReportData(data);
+    } catch (err) {
+      alert("Lỗi lập báo cáo: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ✅ HÀM IN BÁO CÁO
+  const handlePrint = () => {
+      const printContent = document.getElementById("report-print-section");
+      const windowUrl = 'about:blank';
+      const windowName = 'Print' + new Date().getTime();
+      const printWindow = window.open(windowUrl, windowName, 'left=50000,top=50000,width=0,height=0');
+
+      printWindow.document.write(`
+          <html>
+              <head>
+                  <title>Báo Cáo Doanh Thu</title>
+                  <style>
+                      body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+                      table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                      th, td { border: 1px solid #000; padding: 10px; text-align: left; }
+                      th { background-color: #f0f0f0; }
+                      .text-right { text-align: right; }
+                      .total-row { font-weight: bold; font-size: 1.1em; }
+                      h1 { text-transform: uppercase; margin-bottom: 5px; }
+                  </style>
+              </head>
+              <body>
+                  <h1>Báo Cáo Doanh Thu</h1>
+                  <p>Thời gian: ${reportType === 'month' ? `Tháng ${month}` : 'Cả năm'} / ${year}</p>
+                  ${printContent.innerHTML}
+              </body>
+          </html>
+      `);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+          printWindow.print();
+          printWindow.close();
+      }, 250);
+  };
+
+  return (
+    <div style={styles.wrapper}>
+      <div style={styles.header}>
+        <h1 style={styles.title}>📈 Báo cáo doanh thu</h1>
+        <p style={styles.subtitle}>Xem doanh thu theo tháng/năm và tỷ lệ từng loại phòng</p>
+      </div>
+
+      {/* FILTER CARD */}
+      <div style={styles.filterCard}>
+        {/* Chọn loại báo cáo */}
+        <div style={{marginBottom: '15px', display: 'flex', gap: '20px'}}>
+            <label style={{cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px'}}>
+                <input 
+                    type="radio" 
+                    name="rptType" 
+                    checked={reportType === 'month'} 
+                    onChange={() => setReportType('month')}
+                /> 
+                Theo Tháng
+            </label>
+            <label style={{cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px'}}>
+                <input 
+                    type="radio" 
+                    name="rptType" 
+                    checked={reportType === 'year'} 
+                    onChange={() => setReportType('year')}
+                /> 
+                Theo Năm
+            </label>
+        </div>
+
+        <div style={styles.filterRow}>
+            {/* Chỉ hiện chọn tháng nếu là báo cáo tháng */}
+            {reportType === 'month' && (
+                <div style={styles.formGroup}>
+                    <label style={styles.label}>Tháng:</label>
+                    <select 
+                        value={month} 
+                        onChange={(e) => setMonth(e.target.value)}
+                        style={styles.select}
+                    >
+                        {Array.from({length: 12}, (_, i) => i + 1).map(m => (
+                            <option key={m} value={m}>Tháng {m}</option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
+            <div style={styles.formGroup}>
+                <label style={styles.label}>Năm:</label>
+                <input 
+                    type="number" 
+                    value={year} 
+                    onChange={(e) => setYear(e.target.value)}
+                    style={styles.input}
+                />
+            </div>
+
+            <button 
+                onClick={handleCreateReport} 
+                style={styles.reportBtn}
+                disabled={loading}
+            >
+                {loading ? "⏳..." : "📊 Lập báo cáo"}
+            </button>
+        </div>
+      </div>
+
+      {/* RESULT SECTION */}
+      {reportData && (
+        <div style={styles.resultSection}>
+            <div style={styles.reportHeader}>
+                <h3 style={{margin: 0, color: '#1e293b'}}>
+                    KẾT QUẢ: {reportType === 'month' ? `THÁNG ${month}` : 'CẢ NĂM'} / {year}
+                </h3>
+                
+                {/* NÚT IN MỚI */}
+                <button style={styles.printBtn} onClick={handlePrint}>🖨️ In Báo Cáo</button>
+            </div>
+
+            <div style={styles.tableCard} id="report-print-section">
+                <table style={styles.table}>
+                    <thead>
+                        <tr style={styles.tableHeader}>
+                            <th style={styles.th}>STT</th>
+                            <th style={styles.th}>Loại Phòng</th>
+                            <th style={{...styles.th, textAlign: 'right'}}>Doanh Thu</th>
+                            <th style={{...styles.th, textAlign: 'right'}}>Tỷ Lệ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {reportData.map((item, index) => {
+                            const percent = totalRevenue > 0 
+                                ? ((item.DoanhThu / totalRevenue) * 100).toFixed(2) 
+                                : 0;
+                            
+                            return (
+                                <tr key={index} style={{...styles.tr, background: index % 2 === 0 ? "#fff" : "#f8fafc"}}>
+                                    <td style={styles.td}>{index + 1}</td>
+                                    <td style={{...styles.td, fontWeight: '600', color: '#334155'}}>
+                                        {item.TenLoaiPhong}
+                                    </td>
+                                    <td style={{...styles.td, textAlign: 'right', color: '#2563eb', fontWeight: 'bold'}}>
+                                        {Number(item.DoanhThu).toLocaleString()} đ
+                                    </td>
+                                    <td style={{...styles.td, textAlign: 'right'}}>
+                                        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px'}}>
+                                            <span>{percent}%</span>
+                                            <div style={{width: '50px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden'}}>
+                                                <div style={{width: `${percent}%`, height: '100%', background: '#10b981'}}></div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                        
+                        <tr style={{borderTop: '2px solid #334155', background: '#f1f5f9'}} className="total-row">
+                            <td colSpan={2} style={{padding: '16px 24px', fontWeight: 'bold', fontSize: '16px'}}>TỔNG CỘNG</td>
+                            <td style={{padding: '16px 24px', textAlign: 'right', fontWeight: 'bold', fontSize: '18px', color: '#dc2626'}}>
+                                {totalRevenue.toLocaleString()} đ
+                            </td>
+                            <td style={{padding: '16px 24px', textAlign: 'right', fontWeight: 'bold'}}>100%</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const styles = {
+  // ... (Các style cũ giữ nguyên: wrapper, header, title, subtitle, filterCard, select, input, reportBtn...)
+  wrapper: { padding: "2rem 3rem", background: "#F5F8FF", minHeight: "100vh" },
+  header: { marginBottom: "2rem" },
+  title: { fontSize: "2rem", fontWeight: "700", color: "#1F2A40", margin: 0 },
+  subtitle: { color: "#64748b", marginTop: "5px" },
+  filterCard: { background: "white", padding: "20px 30px", borderRadius: "12px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.05)", marginBottom: "30px", border: '1px solid #e2e8f0' },
+  filterRow: { display: "flex", gap: "20px", alignItems: "flex-end" },
+  formGroup: { display: "flex", flexDirection: "column", gap: "8px" },
+  label: { fontSize: "14px", fontWeight: "600", color: "#334155" },
+  select: { padding: "10px 15px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "15px", minWidth: "150px", outline: "none" },
+  input: { padding: "10px 15px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "15px", width: "100px", outline: "none" },
+  
+  reportBtn: {
+      padding: "10px 24px", background: "#3A7DFF", color: "white", border: "none", borderRadius: "8px", 
+      fontSize: "15px", fontWeight: "600", cursor: "pointer", boxShadow: "0 4px 6px rgba(58, 125, 255, 0.3)", height: "42px"
+  },
+  // Nút in
+  printBtn: {
+      padding: "8px 16px", background: "#fff", color: "#334155", border: "1px solid #cbd5e1", borderRadius: "6px",
+      fontSize: "14px", fontWeight: "600", cursor: "pointer", display: 'flex', alignItems: 'center', gap: '5px'
+  },
+
+  resultSection: { animation: "fadeIn 0.5s ease-in-out" },
+  reportHeader: { marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '10px' },
+  tableCard: { background: "white", borderRadius: "16px", boxShadow: "0 4px 20px rgba(0,0,0,0.05)", overflow: "hidden" },
+  table: { width: "100%", borderCollapse: "collapse" },
+  tableHeader: { background: "#718096" },
+  th: { padding: "16px 24px", textAlign: "left", color: "#fff", fontWeight: "600", textTransform: "uppercase", fontSize: "13px", letterSpacing: "0.5px" },
+  td: { padding: "16px 24px", borderBottom: "1px solid #f1f5f9", color: "#334155", fontSize: "15px" },
+  tr: { transition: "0.2s" },
+};
+
+export default ReportManagement;
+```
+
 ### frontend\src\pages\RoomManagement.jsx
 ```jsx
 import React, { useState, useEffect } from "react";
@@ -3160,7 +3588,7 @@ const emptyForm = {
   maPhong: "",
   tenPhong: "",
   loaiPhong: "",
-  tinhTrang: "Trống", // Mặc định
+  tinhTrang: "Trống", 
   ghiChu: "",
 };
 
@@ -3180,8 +3608,11 @@ const RoomManagement = () => {
   const [editingId, setEditingId] = useState(null);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
+  
+  // State tìm kiếm & Lọc
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterStatus, setFilterStatus] = useState("ALL"); // ✅ THÊM STATE LỌC TRẠNG THÁI
 
-  // ✅ Biến kiểm tra xem phòng đang sửa có phải là "Đã thuê" không
   const isRented = form.tinhTrang === "Đã thuê";
 
   useEffect(() => {
@@ -3233,10 +3664,8 @@ const RoomManagement = () => {
   };
 
   const closeModal = () => setIsModalOpen(false);
-
-  const handleChange = (e) =>
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
-
+  const handleChange = (e) => setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  
   const validate = () => {
     const errs = {};
     if (!form.tenPhong.trim()) errs.tenPhong = "Tên phòng không được trống";
@@ -3248,9 +3677,7 @@ const RoomManagement = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validate()) return;
-
     setLoading(true);
-
     try {
       if (mode === "add") {
         const generatedCode = generateRoomCode(form.tenPhong);
@@ -3259,7 +3686,6 @@ const RoomManagement = () => {
             setLoading(false);
             return;
         }
-
         const payload = {
             MaPhong: generatedCode,
             TenPhong: form.tenPhong,
@@ -3270,7 +3696,6 @@ const RoomManagement = () => {
         await api.post("/phong", payload);
         alert("✅ Thêm phòng thành công!");
       } else {
-        // Khi sửa: Gửi thông tin cập nhật
         const payload = {
             TenPhong: form.tenPhong,
             MaLoaiPhong: form.loaiPhong,
@@ -3279,7 +3704,6 @@ const RoomManagement = () => {
         await api.put(`/phong/${editingId}`, payload);
         alert("✅ Cập nhật phòng thành công!");
       }
-
       fetchRooms();
       setIsModalOpen(false);
     } catch (error) {
@@ -3307,9 +3731,7 @@ const RoomManagement = () => {
     const isMaintenance = room.TinhTrang === "Bảo trì";
     const newStatus = isMaintenance ? "Trống" : "Bảo trì";
     const actionText = isMaintenance ? "Hoàn tất bảo trì" : "Đưa vào bảo trì";
-
     if (!window.confirm(`Bạn muốn ${actionText} cho phòng ${room.TenPhong}?`)) return;
-
     try {
         await api.put(`/phong/${room.MaPhong}/maintenance`, { status: newStatus });
         alert("✅ Cập nhật trạng thái thành công!");
@@ -3323,9 +3745,7 @@ const RoomManagement = () => {
       const msg = action === 'stop' 
         ? `Ngưng kinh doanh phòng ${room.TenPhong}? (Phòng sẽ không thể chọn để thuê)`
         : `Kích hoạt lại phòng ${room.TenPhong}?`;
-      
       if(!window.confirm(msg)) return;
-
       try {
           await api.put(`/phong/${room.MaPhong}/business`, { action });
           alert("✅ Thành công!");
@@ -3334,6 +3754,25 @@ const RoomManagement = () => {
           alert("❌ Lỗi: " + (error.response?.data?.message || "Lỗi cập nhật"));
       }
   }
+
+  // ✅ LOGIC LỌC KẾT HỢP (TỪ KHÓA + TRẠNG THÁI)
+  const filteredRooms = rooms.filter((room) => {
+    // 1. Lọc theo trạng thái (Dropdown)
+    if (filterStatus !== "ALL" && room.TinhTrang !== filterStatus) {
+        return false;
+    }
+
+    // 2. Lọc theo từ khóa (Input)
+    if (!searchTerm) return true;
+    const lowerTerm = searchTerm.toLowerCase();
+    return (
+      room.TenPhong.toLowerCase().includes(lowerTerm) ||
+      room.MaPhong.toLowerCase().includes(lowerTerm) ||
+      (room.TenLoaiPhong && room.TenLoaiPhong.toLowerCase().includes(lowerTerm)) ||
+      (room.GhiChu && room.GhiChu.toLowerCase().includes(lowerTerm)) ||
+      room.TinhTrang.toLowerCase().includes(lowerTerm)
+    );
+  });
 
   return (
     <div style={styles.wrapper}>
@@ -3344,9 +3783,43 @@ const RoomManagement = () => {
             Quản lý thông tin phòng, loại phòng và tình trạng phòng.
           </p>
         </div>
-        <button style={styles.addButton} onClick={openAddModal}>
-           + Thêm phòng
-        </button>
+        
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            {/* ✅ THÊM DROPDOWN LỌC TRẠNG THÁI */}
+            <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                style={styles.filterSelect}
+            >
+                <option value="ALL">Tất cả trạng thái</option>
+                <option value="Trống">Phòng Trống</option>
+                <option value="Đã thuê">Đang có khách</option>
+                <option value="Bảo trì">Đang bảo trì</option>
+                <option value="Ngưng kinh doanh">Ngưng kinh doanh</option>
+            </select>
+
+            {/* Ô tìm kiếm */}
+            <div style={{position: 'relative'}}>
+                <input 
+                    type="text" 
+                    placeholder="🔍 Tìm tên, loại..." 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    style={styles.searchInput}
+                />
+                {searchTerm && (
+                    <button 
+                        onClick={() => setSearchTerm("")}
+                        style={styles.clearSearchBtn}
+                        title="Xóa tìm kiếm"
+                    >✕</button>
+                )}
+            </div>
+
+            <button style={styles.addButton} onClick={openAddModal}>
+            + Thêm phòng
+            </button>
+        </div>
       </div>
 
       {loading && <p style={{ textAlign: "center" }}>⏳ Đang tải...</p>}
@@ -3366,7 +3839,14 @@ const RoomManagement = () => {
           </thead>
 
           <tbody>
-            {rooms.map((room) => {
+            {filteredRooms.length === 0 ? (
+                <tr>
+                    <td colSpan="7" style={{textAlign: 'center', padding: '30px', color: '#666'}}>
+                        <div style={{fontSize: '40px', marginBottom: '10px'}}>🔍</div>
+                        Không tìm thấy phòng nào phù hợp.
+                    </td>
+                </tr>
+            ) : filteredRooms.map((room) => {
               const isStopped = room.TinhTrang === 'Ngưng kinh doanh';
               const hasHistory = room.CoLichSu > 0; 
 
@@ -3383,20 +3863,14 @@ const RoomManagement = () => {
                   <td style={styles.td}>{room.TenPhong}</td>
 
                   <td style={styles.td}>
-                    <span
-                      style={loaiPhongBadgeStyle(
-                        room.TenLoaiPhong || room.MaLoaiPhong
-                      )}
-                    >
+                    <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
                       {room.TenLoaiPhong || room.MaLoaiPhong}
                     </span>
                   </td>
 
                   <td style={styles.td}>
                     {room.DonGia
-                      ? Number(room.DonGia).toLocaleString("vi-VN", {
-                          minimumFractionDigits: 0,
-                        }) + " VND"
+                      ? Number(room.DonGia).toLocaleString("vi-VN", { minimumFractionDigits: 0 }) + " VND"
                       : "-"}
                   </td>
 
@@ -3457,7 +3931,6 @@ const RoomManagement = () => {
                             )}
                           </>
                       )}
-
                     </div>
                   </td>
                 </tr>
@@ -3467,7 +3940,7 @@ const RoomManagement = () => {
         </table>
       </div>
 
-      {/* MODAL */}
+      {/* MODAL GIỮ NGUYÊN NHƯ CŨ */}
       {isModalOpen && (
         <div style={styles.modalOverlay} onClick={closeModal}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -3483,7 +3956,6 @@ const RoomManagement = () => {
                     name="tenPhong"
                     value={form.tenPhong}
                     onChange={handleChange}
-                    // ✅ Khóa Tên phòng nếu đang ở chế độ Sửa VÀ phòng Đang thuê
                     disabled={mode === "edit" && isRented} 
                     style={{
                         ...styles.input,
@@ -3493,10 +3965,9 @@ const RoomManagement = () => {
                   />
                   {mode === "add" && (
                     <p style={{ fontSize: "0.75rem", color: "#6B7280", marginTop: "0.25rem" }}>
-                        VD: Nhập "Phòng 101" → Mã phòng sẽ tự tạo là P101
+                      VD: Nhập "Phòng 101" → Mã phòng sẽ tự tạo là P101
                     </p>
                   )}
-                  {/* Hiển thị cảnh báo nếu bị khóa */}
                   {mode === "edit" && isRented && (
                     <p style={{ fontSize: "0.75rem", color: "#EF4444", marginTop: "0.25rem" }}>
                         🔒 Phòng đang thuê, không thể sửa Tên phòng.
@@ -3515,7 +3986,6 @@ const RoomManagement = () => {
                     name="loaiPhong"
                     value={form.loaiPhong}
                     onChange={handleChange}
-                    // ✅ Khóa Loại phòng nếu phòng Đang thuê
                     disabled={isRented}
                     style={{
                         ...styles.input,
@@ -3545,7 +4015,6 @@ const RoomManagement = () => {
               <div style={styles.formRow}>
                 <div style={styles.formGroup}>
                   <label>Ghi chú</label>
-                  {/* ✅ Ghi chú luôn cho phép sửa */}
                   <input
                     name="ghiChu"
                     value={form.ghiChu}
@@ -3571,11 +4040,7 @@ const RoomManagement = () => {
                   style={styles.saveButton}
                   disabled={loading}
                 >
-                  {loading
-                    ? "⏳ Đang lưu..."
-                    : mode === "add"
-                    ? "Lưu"
-                    : "Cập nhật"}
+                  {loading ? "⏳ Đang lưu..." : mode === "add" ? "Lưu" : "Cập nhật"}
                 </button>
               </div>
             </div>
@@ -3609,6 +4074,35 @@ const styles = {
     marginTop: "0.3rem",
     color: "#6B7280",
   },
+  // ✅ Style cho ô tìm kiếm và select
+  searchInput: {
+    padding: "0.6rem 1rem",
+    borderRadius: "8px",
+    border: "1px solid #D1D5DB",
+    fontSize: "0.95rem",
+    width: "220px",
+    outline: "none",
+  },
+  filterSelect: {
+    padding: "0.6rem 1rem",
+    borderRadius: "8px",
+    border: "1px solid #D1D5DB",
+    fontSize: "0.95rem",
+    outline: "none",
+    cursor: "pointer",
+    backgroundColor: "white",
+  },
+  clearSearchBtn: {
+    position: 'absolute',
+    right: '10px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    background: 'transparent',
+    border: 'none',
+    color: '#999',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+  },
   addButton: {
     padding: "0.6rem 1.4rem",
     backgroundColor: "#3A7DFF",
@@ -3618,6 +4112,7 @@ const styles = {
     cursor: "pointer",
     fontWeight: 600,
     boxShadow: "0 5px 14px rgba(58, 125, 255, 0.35)",
+    whiteSpace: 'nowrap',
   },
   tableCard: {
     background: "white",
@@ -3796,7 +4291,6 @@ const loaiPhongBadgeStyle = (loai) => {
     D: { bg: "#E9D5FF", color: "#7C3AED" },
     "Loại D": { bg: "#E9D5FF", color: "#7C3AED" },
   };
-
   const style = colors[loai] || { bg: "#E0EAFF", color: "#1E40AF" };
   return {
     display: "inline-block",
@@ -3844,6 +4338,220 @@ const statusBadgeStyle = (status) => {
 };
 
 export default RoomManagement;
+```
+
+### frontend\src\pages\RoomSearch.jsx
+```jsx
+import React, { useState, useEffect } from "react";
+import api from "../services/api";
+
+const RoomSearch = () => {
+  const [rooms, setRooms] = useState([]);
+  const [loading, setLoading] = useState(false);
+  
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterStatus, setFilterStatus] = useState("ALL");
+
+  useEffect(() => {
+    fetchRooms();
+  }, []);
+
+  const fetchRooms = async () => {
+    try {
+      setLoading(true);
+      const response = await api.get("/phong");
+      setRooms(response.data);
+    } catch (error) {
+      console.error("❌ Lỗi khi tải danh sách phòng:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Helper format ngày
+  const formatDate = (dateStr) => {
+      if (!dateStr) return "";
+      const d = new Date(dateStr);
+      return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+  };
+
+  const filteredRooms = rooms.filter((room) => {
+    if (filterStatus !== "ALL" && room.TinhTrang !== filterStatus) return false;
+    if (!searchTerm) return true;
+    const lowerTerm = searchTerm.toLowerCase();
+    return (
+      room.TenPhong.toLowerCase().includes(lowerTerm) ||
+      room.MaPhong.toLowerCase().includes(lowerTerm) ||
+      (room.TenLoaiPhong && room.TenLoaiPhong.toLowerCase().includes(lowerTerm)) ||
+      (room.TenKhach && room.TenKhach.toLowerCase().includes(lowerTerm)) 
+    );
+  });
+
+  return (
+    <div style={styles.wrapper}>
+      <div style={styles.headerRow}>
+        <div>
+          <h1 style={styles.title}>🔍 Tra cứu phòng</h1>
+          <p style={styles.subtitle}>
+            Tra cứu nhanh thông tin, khách đang ở và tình trạng phòng.
+          </p>
+        </div>
+        
+        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+            <div style={styles.quickStats}>
+                <span style={{color: '#059669'}}>Trống: <b>{rooms.filter(r => r.TinhTrang === 'Trống').length}</b></span>
+                <span style={{color: '#DC2626'}}>Đang ở: <b>{rooms.filter(r => r.TinhTrang === 'Đã thuê').length}</b></span>
+            </div>
+
+            <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                style={styles.filterSelect}
+            >
+                <option value="ALL">Tất cả trạng thái</option>
+                <option value="Trống">Phòng Trống</option>
+                <option value="Đã thuê">Đang có khách</option>
+                <option value="Bảo trì">Đang bảo trì</option>
+            </select>
+
+            <div style={{position: 'relative'}}>
+                <input 
+                    type="text" 
+                    placeholder="Tìm phòng, tên khách..." 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    style={styles.searchInput}
+                />
+                {searchTerm && <button onClick={() => setSearchTerm("")} style={styles.clearSearchBtn}>✕</button>}
+            </div>
+        </div>
+      </div>
+
+      {loading && <p style={{ textAlign: "center", color: '#64748b' }}>⏳ Đang tải dữ liệu...</p>}
+
+      <div style={styles.tableCard}>
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Phòng</th>
+              <th style={styles.th}>Loại & Giá</th>
+              {/* CỘT MỚI 1 */}
+              <th style={styles.th}>Khách đang ở</th>
+              {/* CỘT MỚI 2 */}
+              <th style={styles.th}>Thời gian lưu trú</th>
+              <th style={{ ...styles.th, textAlign: "center" }}>Tình trạng</th>
+              <th style={styles.th}>Ghi chú</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {filteredRooms.length === 0 ? (
+                <tr>
+                    <td colSpan="6" style={{textAlign: 'center', padding: '40px', color: '#94a3b8'}}>
+                        Không tìm thấy kết quả.
+                    </td>
+                </tr>
+            ) : filteredRooms.map((room, idx) => {
+              const isOccupied = room.TinhTrang === 'Đã thuê';
+              
+              return (
+                <tr 
+                    key={room.MaPhong} 
+                    style={{
+                        ...styles.tr,
+                        backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc',
+                    }}
+                >
+                  <td style={styles.td}>
+                      <div style={{fontWeight: 'bold', color: '#1e293b', fontSize: '1rem'}}>{room.TenPhong}</div>
+                      <span style={styles.codeBadge}>{room.MaPhong}</span>
+                  </td>
+
+                  <td style={styles.td}>
+                    <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
+                      {room.TenLoaiPhong || room.MaLoaiPhong}
+                    </span>
+                    <div style={{marginTop: '4px', fontSize: '0.85rem', color: '#64748b'}}>
+                        {Number(room.DonGia).toLocaleString("vi-VN")} đ
+                    </div>
+                  </td>
+
+                  {/* THÔNG TIN KHÁCH HÀNG */}
+                  <td style={styles.td}>
+                    {isOccupied && room.TenKhach ? (
+                        <div>
+                            <div style={{fontWeight: '600', color: '#334155'}}>👤 {room.TenKhach}</div>
+                            <div style={{fontSize: '0.85rem', color: '#059669'}}>📞 {room.SDTKhach}</div>
+                        </div>
+                    ) : (
+                        <span style={{color: '#cbd5e1'}}>---</span>
+                    )}
+                  </td>
+
+                  {/* THÔNG TIN NGÀY */}
+                  <td style={styles.td}>
+                    {isOccupied && room.NgayBatDauThue ? (
+                        <div style={{fontSize: '0.9rem'}}>
+                            <div style={{color: '#2563eb'}}>In: {formatDate(room.NgayBatDauThue)}</div>
+                            <div style={{color: '#d97706'}}>Out: {formatDate(room.NgayDuKienTra)}</div>
+                        </div>
+                    ) : (
+                        <span style={{color: '#cbd5e1'}}>---</span>
+                    )}
+                  </td>
+
+                  <td style={{ ...styles.td, textAlign: "center" }}>
+                    <span style={statusBadgeStyle(room.TinhTrang)}>
+                      {room.TinhTrang}
+                    </span>
+                  </td>
+
+                  <td style={{...styles.td, color: '#64748b', fontStyle: 'italic', fontSize: '0.85rem'}}>
+                    {room.GhiChu || ""}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// Styles
+const styles = {
+  wrapper: { width: "100%", maxWidth: "1400px", margin: "0 auto", padding: "2rem" },
+  headerRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem" },
+  title: { fontSize: "2rem", fontWeight: 700, color: "#1F2A40", marginBottom: "0.5rem" },
+  subtitle: { color: "#64748b", fontSize: "0.95rem" },
+  quickStats: { display: 'flex', gap: '15px', marginRight: '10px', fontSize: '0.9rem', background: '#fff', padding: '8px 16px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
+  searchInput: { padding: "0.7rem 1rem", borderRadius: "8px", border: "1px solid #e2e8f0", fontSize: "0.95rem", width: "240px", outline: "none" },
+  filterSelect: { padding: "0.7rem 1rem", borderRadius: "8px", border: "1px solid #e2e8f0", fontSize: "0.95rem", outline: "none", cursor: "pointer", backgroundColor: "white" },
+  clearSearchBtn: { position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontWeight: 'bold' },
+  tableCard: { background: "white", borderRadius: "16px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.1)", padding: "0", overflowX: "auto", border: "1px solid #e2e8f0" },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: "0.95rem" },
+  th: { padding: "16px 24px", backgroundColor: "#f8fafc", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#475569", textAlign: "left", textTransform: "uppercase", fontSize: "0.8rem", letterSpacing: "0.05em" },
+  tr: { borderBottom: "1px solid #f1f5f9", transition: 'background 0.2s' },
+  td: { padding: "16px 24px", verticalAlign: "middle" },
+  codeBadge: { fontFamily: 'monospace', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', color: '#64748b', fontSize: '0.8rem', marginLeft: '0px' }
+};
+
+const loaiPhongBadgeStyle = (loai) => {
+  const colors = { A: { bg: "#DBEAFE", color: "#1D4ED8" }, B: { bg: "#FEF3C7", color: "#D97706" }, C: { bg: "#FEE2E2", color: "#DC2626" }, D: { bg: "#E9D5FF", color: "#7C3AED" } };
+  const style = colors[loai?.[0]] || { bg: "#E0EAFF", color: "#1E40AF" }; 
+  return { display: "inline-block", padding: "4px 10px", borderRadius: "6px", fontWeight: 600, fontSize: "0.8rem", backgroundColor: style.bg, color: style.color };
+};
+
+const statusBadgeStyle = (status) => {
+  let bg = "#f3f4f6"; let color = "#374151";
+  if (status === "Trống") { bg = "#dcfce7"; color = "#166534"; }
+  else if (status === "Đã thuê") { bg = "#fee2e2"; color = "#991b1b"; }
+  else if (status === "Bảo trì") { bg = "#ffedd5"; color = "#9a3412"; }
+  return { display: "inline-block", padding: "6px 12px", borderRadius: "20px", fontWeight: 600, fontSize: "0.8rem", backgroundColor: bg, color: color, minWidth: "90px", textAlign: 'center' };
+};
+
+export default RoomSearch;
 ```
 
 ### frontend\src\services\api.js

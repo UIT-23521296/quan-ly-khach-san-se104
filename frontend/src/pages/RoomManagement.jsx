@@ -5,7 +5,7 @@ const emptyForm = {
   maPhong: "",
   tenPhong: "",
   loaiPhong: "",
-  tinhTrang: "Trống", // Mặc định
+  tinhTrang: "Trống", 
   ghiChu: "",
 };
 
@@ -25,8 +25,11 @@ const RoomManagement = () => {
   const [editingId, setEditingId] = useState(null);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
+  
+  // State tìm kiếm & Lọc
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterStatus, setFilterStatus] = useState("ALL"); // ✅ THÊM STATE LỌC TRẠNG THÁI
 
-  // ✅ Biến kiểm tra xem phòng đang sửa có phải là "Đã thuê" không
   const isRented = form.tinhTrang === "Đã thuê";
 
   useEffect(() => {
@@ -78,10 +81,8 @@ const RoomManagement = () => {
   };
 
   const closeModal = () => setIsModalOpen(false);
-
-  const handleChange = (e) =>
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
-
+  const handleChange = (e) => setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  
   const validate = () => {
     const errs = {};
     if (!form.tenPhong.trim()) errs.tenPhong = "Tên phòng không được trống";
@@ -93,9 +94,7 @@ const RoomManagement = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validate()) return;
-
     setLoading(true);
-
     try {
       if (mode === "add") {
         const generatedCode = generateRoomCode(form.tenPhong);
@@ -104,7 +103,6 @@ const RoomManagement = () => {
             setLoading(false);
             return;
         }
-
         const payload = {
             MaPhong: generatedCode,
             TenPhong: form.tenPhong,
@@ -115,7 +113,6 @@ const RoomManagement = () => {
         await api.post("/phong", payload);
         alert("✅ Thêm phòng thành công!");
       } else {
-        // Khi sửa: Gửi thông tin cập nhật
         const payload = {
             TenPhong: form.tenPhong,
             MaLoaiPhong: form.loaiPhong,
@@ -124,7 +121,6 @@ const RoomManagement = () => {
         await api.put(`/phong/${editingId}`, payload);
         alert("✅ Cập nhật phòng thành công!");
       }
-
       fetchRooms();
       setIsModalOpen(false);
     } catch (error) {
@@ -152,9 +148,7 @@ const RoomManagement = () => {
     const isMaintenance = room.TinhTrang === "Bảo trì";
     const newStatus = isMaintenance ? "Trống" : "Bảo trì";
     const actionText = isMaintenance ? "Hoàn tất bảo trì" : "Đưa vào bảo trì";
-
     if (!window.confirm(`Bạn muốn ${actionText} cho phòng ${room.TenPhong}?`)) return;
-
     try {
         await api.put(`/phong/${room.MaPhong}/maintenance`, { status: newStatus });
         alert("✅ Cập nhật trạng thái thành công!");
@@ -168,9 +162,7 @@ const RoomManagement = () => {
       const msg = action === 'stop' 
         ? `Ngưng kinh doanh phòng ${room.TenPhong}? (Phòng sẽ không thể chọn để thuê)`
         : `Kích hoạt lại phòng ${room.TenPhong}?`;
-      
       if(!window.confirm(msg)) return;
-
       try {
           await api.put(`/phong/${room.MaPhong}/business`, { action });
           alert("✅ Thành công!");
@@ -179,6 +171,25 @@ const RoomManagement = () => {
           alert("❌ Lỗi: " + (error.response?.data?.message || "Lỗi cập nhật"));
       }
   }
+
+  // ✅ LOGIC LỌC KẾT HỢP (TỪ KHÓA + TRẠNG THÁI)
+  const filteredRooms = rooms.filter((room) => {
+    // 1. Lọc theo trạng thái (Dropdown)
+    if (filterStatus !== "ALL" && room.TinhTrang !== filterStatus) {
+        return false;
+    }
+
+    // 2. Lọc theo từ khóa (Input)
+    if (!searchTerm) return true;
+    const lowerTerm = searchTerm.toLowerCase();
+    return (
+      room.TenPhong.toLowerCase().includes(lowerTerm) ||
+      room.MaPhong.toLowerCase().includes(lowerTerm) ||
+      (room.TenLoaiPhong && room.TenLoaiPhong.toLowerCase().includes(lowerTerm)) ||
+      (room.GhiChu && room.GhiChu.toLowerCase().includes(lowerTerm)) ||
+      room.TinhTrang.toLowerCase().includes(lowerTerm)
+    );
+  });
 
   return (
     <div style={styles.wrapper}>
@@ -189,9 +200,43 @@ const RoomManagement = () => {
             Quản lý thông tin phòng, loại phòng và tình trạng phòng.
           </p>
         </div>
-        <button style={styles.addButton} onClick={openAddModal}>
-           + Thêm phòng
-        </button>
+        
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            {/* ✅ THÊM DROPDOWN LỌC TRẠNG THÁI */}
+            <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                style={styles.filterSelect}
+            >
+                <option value="ALL">Tất cả trạng thái</option>
+                <option value="Trống">Phòng Trống</option>
+                <option value="Đã thuê">Đang có khách</option>
+                <option value="Bảo trì">Đang bảo trì</option>
+                <option value="Ngưng kinh doanh">Ngưng kinh doanh</option>
+            </select>
+
+            {/* Ô tìm kiếm */}
+            <div style={{position: 'relative'}}>
+                <input 
+                    type="text" 
+                    placeholder="🔍 Tìm tên, loại..." 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    style={styles.searchInput}
+                />
+                {searchTerm && (
+                    <button 
+                        onClick={() => setSearchTerm("")}
+                        style={styles.clearSearchBtn}
+                        title="Xóa tìm kiếm"
+                    >✕</button>
+                )}
+            </div>
+
+            <button style={styles.addButton} onClick={openAddModal}>
+            + Thêm phòng
+            </button>
+        </div>
       </div>
 
       {loading && <p style={{ textAlign: "center" }}>⏳ Đang tải...</p>}
@@ -211,7 +256,14 @@ const RoomManagement = () => {
           </thead>
 
           <tbody>
-            {rooms.map((room) => {
+            {filteredRooms.length === 0 ? (
+                <tr>
+                    <td colSpan="7" style={{textAlign: 'center', padding: '30px', color: '#666'}}>
+                        <div style={{fontSize: '40px', marginBottom: '10px'}}>🔍</div>
+                        Không tìm thấy phòng nào phù hợp.
+                    </td>
+                </tr>
+            ) : filteredRooms.map((room) => {
               const isStopped = room.TinhTrang === 'Ngưng kinh doanh';
               const hasHistory = room.CoLichSu > 0; 
 
@@ -228,20 +280,14 @@ const RoomManagement = () => {
                   <td style={styles.td}>{room.TenPhong}</td>
 
                   <td style={styles.td}>
-                    <span
-                      style={loaiPhongBadgeStyle(
-                        room.TenLoaiPhong || room.MaLoaiPhong
-                      )}
-                    >
+                    <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
                       {room.TenLoaiPhong || room.MaLoaiPhong}
                     </span>
                   </td>
 
                   <td style={styles.td}>
                     {room.DonGia
-                      ? Number(room.DonGia).toLocaleString("vi-VN", {
-                          minimumFractionDigits: 0,
-                        }) + " VND"
+                      ? Number(room.DonGia).toLocaleString("vi-VN", { minimumFractionDigits: 0 }) + " VND"
                       : "-"}
                   </td>
 
@@ -302,7 +348,6 @@ const RoomManagement = () => {
                             )}
                           </>
                       )}
-
                     </div>
                   </td>
                 </tr>
@@ -312,7 +357,7 @@ const RoomManagement = () => {
         </table>
       </div>
 
-      {/* MODAL */}
+      {/* MODAL GIỮ NGUYÊN NHƯ CŨ */}
       {isModalOpen && (
         <div style={styles.modalOverlay} onClick={closeModal}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -328,7 +373,6 @@ const RoomManagement = () => {
                     name="tenPhong"
                     value={form.tenPhong}
                     onChange={handleChange}
-                    // ✅ Khóa Tên phòng nếu đang ở chế độ Sửa VÀ phòng Đang thuê
                     disabled={mode === "edit" && isRented} 
                     style={{
                         ...styles.input,
@@ -338,10 +382,9 @@ const RoomManagement = () => {
                   />
                   {mode === "add" && (
                     <p style={{ fontSize: "0.75rem", color: "#6B7280", marginTop: "0.25rem" }}>
-                        VD: Nhập "Phòng 101" → Mã phòng sẽ tự tạo là P101
+                      VD: Nhập "Phòng 101" → Mã phòng sẽ tự tạo là P101
                     </p>
                   )}
-                  {/* Hiển thị cảnh báo nếu bị khóa */}
                   {mode === "edit" && isRented && (
                     <p style={{ fontSize: "0.75rem", color: "#EF4444", marginTop: "0.25rem" }}>
                         🔒 Phòng đang thuê, không thể sửa Tên phòng.
@@ -360,7 +403,6 @@ const RoomManagement = () => {
                     name="loaiPhong"
                     value={form.loaiPhong}
                     onChange={handleChange}
-                    // ✅ Khóa Loại phòng nếu phòng Đang thuê
                     disabled={isRented}
                     style={{
                         ...styles.input,
@@ -390,7 +432,6 @@ const RoomManagement = () => {
               <div style={styles.formRow}>
                 <div style={styles.formGroup}>
                   <label>Ghi chú</label>
-                  {/* ✅ Ghi chú luôn cho phép sửa */}
                   <input
                     name="ghiChu"
                     value={form.ghiChu}
@@ -416,11 +457,7 @@ const RoomManagement = () => {
                   style={styles.saveButton}
                   disabled={loading}
                 >
-                  {loading
-                    ? "⏳ Đang lưu..."
-                    : mode === "add"
-                    ? "Lưu"
-                    : "Cập nhật"}
+                  {loading ? "⏳ Đang lưu..." : mode === "add" ? "Lưu" : "Cập nhật"}
                 </button>
               </div>
             </div>
@@ -454,6 +491,35 @@ const styles = {
     marginTop: "0.3rem",
     color: "#6B7280",
   },
+  // ✅ Style cho ô tìm kiếm và select
+  searchInput: {
+    padding: "0.6rem 1rem",
+    borderRadius: "8px",
+    border: "1px solid #D1D5DB",
+    fontSize: "0.95rem",
+    width: "220px",
+    outline: "none",
+  },
+  filterSelect: {
+    padding: "0.6rem 1rem",
+    borderRadius: "8px",
+    border: "1px solid #D1D5DB",
+    fontSize: "0.95rem",
+    outline: "none",
+    cursor: "pointer",
+    backgroundColor: "white",
+  },
+  clearSearchBtn: {
+    position: 'absolute',
+    right: '10px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    background: 'transparent',
+    border: 'none',
+    color: '#999',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+  },
   addButton: {
     padding: "0.6rem 1.4rem",
     backgroundColor: "#3A7DFF",
@@ -463,6 +529,7 @@ const styles = {
     cursor: "pointer",
     fontWeight: 600,
     boxShadow: "0 5px 14px rgba(58, 125, 255, 0.35)",
+    whiteSpace: 'nowrap',
   },
   tableCard: {
     background: "white",
@@ -641,7 +708,6 @@ const loaiPhongBadgeStyle = (loai) => {
     D: { bg: "#E9D5FF", color: "#7C3AED" },
     "Loại D": { bg: "#E9D5FF", color: "#7C3AED" },
   };
-
   const style = colors[loai] || { bg: "#E0EAFF", color: "#1E40AF" };
   return {
     display: "inline-block",

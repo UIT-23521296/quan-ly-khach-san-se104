@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require("uuid");
 const calculateBill = async (soPhieu) => {
     // 1. Lấy thông tin phiếu, phòng, đơn giá
     const sqlBase = `
-        SELECT pt.SoPhieu, pt.MaPhong, pt.NgayBatDauThue, 
+        SELECT pt.SoPhieu, pt.MaPhong, pt.NgayBatDauThue, pt.NgayDuKienTra, 
                p.TenPhong, lp.DonGia, lp.TenLoaiPhong,
                (SELECT HoTen FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as TenKhachDaiDien,
                (SELECT DiaChi FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as DiaChi
@@ -15,11 +15,12 @@ const calculateBill = async (soPhieu) => {
         JOIN loaiphong lp ON p.MaLoaiPhong = lp.MaLoaiPhong
         WHERE pt.SoPhieu = ?
     `;
+    
     const [rows] = await db.promise().query(sqlBase, [soPhieu]);
     if (rows.length === 0) throw new Error("Phiếu thuê không tồn tại");
     const data = rows[0];
 
-    // 2. Lấy danh sách khách để đếm số lượng và check quốc tịch
+    // 2. Lấy danh sách khách... 
     const sqlKhach = `
         SELECT lk.MaLoaiKhach, lk.HeSoPhuThu 
         FROM ct_phieuthue ct
@@ -30,24 +31,29 @@ const calculateBill = async (soPhieu) => {
     const [dsKhach] = await db.promise().query(sqlKhach, [soPhieu]);
     const soLuongKhach = dsKhach.length;
 
-    // 3. Xử lý logic tính số ngày (Nếu đi trong ngày tính là 1 ngày)
+    // 3. Xử lý logic tính số ngày
     const ngayBatDau = new Date(data.NgayBatDauThue);
-    const ngayKetThuc = new Date(); // Tính đến giờ hiện tại
-    let soNgay = Math.ceil((ngayKetThuc - ngayBatDau) / (1000 * 60 * 60 * 24));
-    if (soNgay <= 0) soNgay = 1;
-
-    // 4. LOGIC LINH HOẠT:
     
-    // A. Hệ Số Khách Nước Ngoài (Lấy hệ số lớn nhất trong đám khách)
-    // Ví dụ: Có 1 khách NN (1.5) và 2 khách Nội địa (1.0) -> Hệ số chung là 1.5
+    // Nếu data.NgayDuKienTra bị null (lỗi dữ liệu cũ) thì lấy ngày hiện tại
+    const ngayKetThuc = data.NgayDuKienTra ? new Date(data.NgayDuKienTra) : new Date(); 
+
+    // Tính số mili-giây chênh lệch
+    const diffTime = Math.abs(ngayKetThuc - ngayBatDau);
+    // Chuyển sang ngày (làm tròn lên)
+    let soNgay = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (soNgay <= 0) soNgay = 1; // Ở chưa được 1 ngày thì tính là 1 ngày
+
+    // 4. LOGIC LINH HOẠT
+    
+    // A. Hệ Số Khách Nước Ngoài
     let heSoKhach = 1.0;
     if (dsKhach.length > 0) {
         heSoKhach = Math.max(...dsKhach.map(k => k.HeSoPhuThu));
     }
 
-    // B. Phụ thu số lượng khách (Tra cứu bảng tilephuthu)
+    // B. Phụ thu số lượng khách
     let tiLePhuThu = 0;
-    // Tìm tỉ lệ ứng với số khách hiện tại
     const [resTiLe] = await db.promise().query(
         "SELECT TiLePhuThu FROM tilephuthu WHERE KhachThu = ?", 
         [soLuongKhach]
@@ -56,7 +62,6 @@ const calculateBill = async (soPhieu) => {
     if (resTiLe.length > 0) {
         tiLePhuThu = resTiLe[0].TiLePhuThu;
     } else {
-        // Fallback: Nếu số khách lớn hơn dữ liệu trong bảng (vd 5 khách), lấy mức cao nhất
         const [maxTiLe] = await db.promise().query("SELECT TiLePhuThu FROM tilephuthu ORDER BY KhachThu DESC LIMIT 1");
         if (maxTiLe.length > 0 && soLuongKhach > 2) {
              tiLePhuThu = maxTiLe[0].TiLePhuThu; 
@@ -64,7 +69,6 @@ const calculateBill = async (soPhieu) => {
     }
 
     // 5. TÍNH TỔNG TIỀN
-    // Công thức: (Đơn giá * Số ngày * (1 + Tỉ lệ phụ thu)) * Hệ số khách
     const donGia = parseFloat(data.DonGia);
     const thanhTien = (donGia * soNgay * (1 + tiLePhuThu)) * heSoKhach;
 

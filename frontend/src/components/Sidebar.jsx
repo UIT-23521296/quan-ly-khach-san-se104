@@ -7,6 +7,7 @@ const Sidebar = ({ activeMenu, setActiveMenu }) => {
 
   const menuItems = [
     { id: "dashboard", icon: "📊", label: "Tổng quan", path: "/" },
+    { id: "room-search", icon: "🔍", label: "Tra cứu phòng", path: "/room-search" },
     { id: "rooms", icon: "🛏️", label: "Danh mục phòng", path: "/rooms" },
     { id: "booking", icon: "📝", label: "Thuê phòng", path: "/phieuthue" },
     { id: "invoice", icon: "💵", label: "Hóa đơn", path: "/invoice" },
