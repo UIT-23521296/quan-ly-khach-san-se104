@@ -1,0 +1,174 @@
+const db = require("../config/db");
+const hoadonModel = require("../models/hoadonModel");
+const { v4: uuidv4 } = require("uuid");
+
+// --- HÀM LOGIC TÍNH TIỀN TRUNG TÂM ---
+const calculateBill = async (soPhieu) => {
+    // 1. Lấy thông tin phiếu, phòng, đơn giá
+    const sqlBase = `
+        SELECT pt.SoPhieu, pt.MaPhong, pt.NgayBatDauThue, 
+               p.TenPhong, lp.DonGia, lp.TenLoaiPhong,
+               (SELECT HoTen FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as TenKhachDaiDien,
+               (SELECT DiaChi FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as DiaChi
+        FROM phieuthue pt
+        JOIN phong p ON pt.MaPhong = p.MaPhong
+        JOIN loaiphong lp ON p.MaLoaiPhong = lp.MaLoaiPhong
+        WHERE pt.SoPhieu = ?
+    `;
+    const [rows] = await db.promise().query(sqlBase, [soPhieu]);
+    if (rows.length === 0) throw new Error("Phiếu thuê không tồn tại");
+    const data = rows[0];
+
+    // 2. Lấy danh sách khách để đếm số lượng và check quốc tịch
+    const sqlKhach = `
+        SELECT lk.MaLoaiKhach, lk.HeSoPhuThu 
+        FROM ct_phieuthue ct
+        JOIN khachhang kh ON ct.MaKH = kh.MaKH
+        JOIN loaikhach lk ON kh.MaLoaiKhach = lk.MaLoaiKhach
+        WHERE ct.SoPhieu = ?
+    `;
+    const [dsKhach] = await db.promise().query(sqlKhach, [soPhieu]);
+    const soLuongKhach = dsKhach.length;
+
+    // 3. Xử lý logic tính số ngày (Nếu đi trong ngày tính là 1 ngày)
+    const ngayBatDau = new Date(data.NgayBatDauThue);
+    const ngayKetThuc = new Date(); // Tính đến giờ hiện tại
+    let soNgay = Math.ceil((ngayKetThuc - ngayBatDau) / (1000 * 60 * 60 * 24));
+    if (soNgay <= 0) soNgay = 1;
+
+    // 4. LOGIC LINH HOẠT:
+    
+    // A. Hệ Số Khách Nước Ngoài (Lấy hệ số lớn nhất trong đám khách)
+    // Ví dụ: Có 1 khách NN (1.5) và 2 khách Nội địa (1.0) -> Hệ số chung là 1.5
+    let heSoKhach = 1.0;
+    if (dsKhach.length > 0) {
+        heSoKhach = Math.max(...dsKhach.map(k => k.HeSoPhuThu));
+    }
+
+    // B. Phụ thu số lượng khách (Tra cứu bảng tilephuthu)
+    let tiLePhuThu = 0;
+    // Tìm tỉ lệ ứng với số khách hiện tại
+    const [resTiLe] = await db.promise().query(
+        "SELECT TiLePhuThu FROM tilephuthu WHERE KhachThu = ?", 
+        [soLuongKhach]
+    );
+
+    if (resTiLe.length > 0) {
+        tiLePhuThu = resTiLe[0].TiLePhuThu;
+    } else {
+        // Fallback: Nếu số khách lớn hơn dữ liệu trong bảng (vd 5 khách), lấy mức cao nhất
+        const [maxTiLe] = await db.promise().query("SELECT TiLePhuThu FROM tilephuthu ORDER BY KhachThu DESC LIMIT 1");
+        if (maxTiLe.length > 0 && soLuongKhach > 2) {
+             tiLePhuThu = maxTiLe[0].TiLePhuThu; 
+        }
+    }
+
+    // 5. TÍNH TỔNG TIỀN
+    // Công thức: (Đơn giá * Số ngày * (1 + Tỉ lệ phụ thu)) * Hệ số khách
+    const donGia = parseFloat(data.DonGia);
+    const thanhTien = (donGia * soNgay * (1 + tiLePhuThu)) * heSoKhach;
+
+    return {
+        ...data,
+        SoNgay: soNgay,
+        SoKhach: soLuongKhach,
+        TiLePhuThu: tiLePhuThu,
+        HeSoKhach: heSoKhach,
+        ThanhTien: Math.round(thanhTien)
+    };
+};
+
+// API 1: Preview hóa đơn (Để hiện lên Modal)
+exports.previewHoaDon = async (req, res) => {
+    try {
+        const bill = await calculateBill(req.params.soPhieu);
+        res.json(bill);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// API 2: Thanh toán & Lưu DB
+exports.createAndPay = async (req, res) => {
+    const { soPhieu, tienKhachDua } = req.body; // Chỉ cần nhận tiền khách đưa
+    const conn = await db.promise().getConnection();
+    
+    try {
+        await conn.beginTransaction();
+
+        // Tính lại lần cuối để chốt số liệu
+        const bill = await calculateBill(soPhieu);
+        
+        // Tạo mã hóa đơn
+        const soHoaDon = "HD" + Date.now();
+
+        // 1. Insert Hóa Đơn
+        await conn.query(
+            `INSERT INTO hoadon (SoHoaDon, NgayLap, TenKhachHangCoQuan, DiaChi, TriGia, SoPhieu, TrangThaiThanhToan)
+             VALUES (?, NOW(), ?, ?, ?, ?, 'DA_THANH_TOAN')`,
+            [soHoaDon, bill.TenKhachDaiDien, bill.DiaChi, bill.ThanhTien, soPhieu]
+        );
+
+        // 2. Insert Chi Tiết Hóa Đơn
+        const maCTHD = uuidv4();
+        await conn.query(
+            `INSERT INTO ct_hoadon (MaCTHD, SoHoaDon, MaPhong, SoNgayThue, DonGia, SoKhach, KhachNuocNgoai, PhuThu, ThanhTien)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                maCTHD, 
+                soHoaDon, 
+                bill.MaPhong, 
+                bill.SoNgay, 
+                bill.DonGia, 
+                bill.SoKhach, 
+                bill.HeSoKhach > 1 ? 1 : 0, // 1 là có khách NN, 0 là không
+                bill.TiLePhuThu, 
+                bill.ThanhTien
+            ]
+        );
+
+        // 3. Update Phiếu Thuê -> Đã thanh toán, set ngày trả thực tế là NOW()
+        await conn.query(
+            "UPDATE phieuthue SET TrangThaiLuuTru = 'DA_THANH_TOAN', NgayDuKienTra = NOW() WHERE SoPhieu = ?", 
+            [soPhieu]
+        );
+
+        // 4. Update Phòng -> Trống
+        await conn.query("UPDATE phong SET TinhTrang = 'Trống' WHERE MaPhong = ?", [bill.MaPhong]);
+
+        await conn.commit();
+        res.json({ message: "Thanh toán thành công!", soHoaDon });
+
+    } catch (err) {
+        await conn.rollback();
+        res.status(500).json({ message: "Lỗi thanh toán: " + err.message });
+    } finally {
+        conn.release();
+    }
+};
+
+// API 3: Lấy danh sách hóa đơn
+exports.getAllHoaDon = async (req, res) => {
+    try {
+        const [rows] = await hoadonModel.getAll();
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// API 4: Lấy chi tiết hóa đơn theo Số Hóa Đơn
+exports.getHoaDonDetail = async (req, res) => {
+  try {
+    const { soHoaDon } = req.params;
+    const [rows] = await hoadonModel.getById(soHoaDon);
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+    }
+    
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
