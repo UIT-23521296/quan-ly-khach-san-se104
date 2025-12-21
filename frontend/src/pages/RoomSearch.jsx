@@ -91,9 +91,7 @@ const RoomSearch = () => {
             <tr>
               <th style={styles.th}>Phòng</th>
               <th style={styles.th}>Loại & Giá</th>
-              {/* CỘT MỚI 1 */}
               <th style={styles.th}>Khách đang ở</th>
-              {/* CỘT MỚI 2 */}
               <th style={styles.th}>Thời gian lưu trú</th>
               <th style={{ ...styles.th, textAlign: "center" }}>Tình trạng</th>
               <th style={styles.th}>Ghi chú</th>
@@ -109,24 +107,40 @@ const RoomSearch = () => {
                 </tr>
             ) : filteredRooms.map((room, idx) => {
               const isOccupied = room.TinhTrang === 'Đã thuê';
+              // ✅ KIỂM TRA LOẠI PHÒNG CÓ BỊ NGƯNG KHÔNG
+              // Backend trả về TrangThaiLoaiPhong: 1 (Active) hoặc 0 (Inactive)
+              const isTypeInactive = room.TrangThaiLoaiPhong === 0; 
               
               return (
                 <tr 
                     key={room.MaPhong} 
                     style={{
                         ...styles.tr,
-                        backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc',
+                        // Nếu loại phòng bị ngưng -> Nền xám, mờ đi
+                        backgroundColor: isTypeInactive ? '#f3f4f6' : (idx % 2 === 0 ? '#ffffff' : '#f8fafc'),
+                        opacity: isTypeInactive ? 0.7 : 1,
                     }}
                 >
                   <td style={styles.td}>
-                      <div style={{fontWeight: 'bold', color: '#1e293b', fontSize: '1rem'}}>{room.TenPhong}</div>
+                      <div style={{fontWeight: 'bold', color: '#1e293b', fontSize: '1rem'}}>
+                          {room.TenPhong}
+                      </div>
                       <span style={styles.codeBadge}>{room.MaPhong}</span>
                   </td>
 
                   <td style={styles.td}>
-                    <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
-                      {room.TenLoaiPhong || room.MaLoaiPhong}
-                    </span>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}>
+                        <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
+                        {room.TenLoaiPhong || room.MaLoaiPhong}
+                        </span>
+                        {/* ✅ HIỂN THỊ CẢNH BÁO NẾU LOẠI PHÒNG BỊ NGƯNG */}
+                        {isTypeInactive && (
+                            <span style={{fontSize: '10px', background: '#374151', color: 'white', padding: '2px 6px', borderRadius: '4px'}}>
+                                ⛔ Ngưng KD
+                            </span>
+                        )}
+                    </div>
+                    
                     <div style={{marginTop: '4px', fontSize: '0.85rem', color: '#64748b'}}>
                         {Number(room.DonGia).toLocaleString("vi-VN")} đ
                     </div>
@@ -157,9 +171,14 @@ const RoomSearch = () => {
                   </td>
 
                   <td style={{ ...styles.td, textAlign: "center" }}>
-                    <span style={statusBadgeStyle(room.TinhTrang)}>
-                      {room.TinhTrang}
-                    </span>
+                    {/* Nếu loại phòng Ngưng KD nhưng phòng đang trống -> Hiện trạng thái đặc biệt */}
+                    {isTypeInactive && !isOccupied ? (
+                        <span style={styles.inactiveBadge}>⛔ Tạm ngưng</span>
+                    ) : (
+                        <span style={statusBadgeStyle(room.TinhTrang)}>
+                            {room.TinhTrang}
+                        </span>
+                    )}
                   </td>
 
                   <td style={{...styles.td, color: '#64748b', fontStyle: 'italic', fontSize: '0.85rem'}}>
@@ -190,7 +209,13 @@ const styles = {
   th: { padding: "16px 24px", backgroundColor: "#f8fafc", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#475569", textAlign: "left", textTransform: "uppercase", fontSize: "0.8rem", letterSpacing: "0.05em" },
   tr: { borderBottom: "1px solid #f1f5f9", transition: 'background 0.2s' },
   td: { padding: "16px 24px", verticalAlign: "middle" },
-  codeBadge: { fontFamily: 'monospace', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', color: '#64748b', fontSize: '0.8rem', marginLeft: '0px' }
+  codeBadge: { fontFamily: 'monospace', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', color: '#64748b', fontSize: '0.8rem', marginLeft: '0px' },
+  
+  // Style cho badge trạng thái ngưng
+  inactiveBadge: {
+      display: "inline-block", padding: "6px 12px", borderRadius: "20px", fontWeight: 600, fontSize: "0.8rem", 
+      backgroundColor: "#e5e7eb", color: "#6b7280", minWidth: "90px", textAlign: 'center', border: '1px solid #d1d5db'
+  }
 };
 
 const loaiPhongBadgeStyle = (loai) => {

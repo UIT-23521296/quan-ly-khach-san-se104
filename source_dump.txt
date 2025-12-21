@@ -17,7 +17,8 @@ quan-ly-khach-san-se104/
 │   │   ├── hoadonController.js
 │   │   ├── loaikhachController.js
 │   │   ├── phieuthueController.js
-│   │   └── phongController.js
+│   │   ├── phongController.js
+│   │   └── quidinhController.js
 │   ├── middleware/
 │   │   ├── .gitkeep
 │   │   ├── authMiddleware.js
@@ -39,6 +40,7 @@ quan-ly-khach-san-se104/
 │   │   ├── loaiphongRoutes.js
 │   │   ├── phieuthueRoutes.js
 │   │   ├── phongRoutes.js
+│   │   ├── quidinhRoutes.js
 │   │   └── thamSoRoutes.js
 │   ├── services/
 │   │   ├── .gitkeep
@@ -65,7 +67,8 @@ quan-ly-khach-san-se104/
 │   │   │   ├── Login.jsx
 │   │   │   ├── ReportManagement.jsx
 │   │   │   ├── RoomManagement.jsx
-│   │   │   └── RoomSearch.jsx
+│   │   │   ├── RoomSearch.jsx
+│   │   │   └── Settings.jsx
 │   │   ├── services/
 │   │   │   └── api.js
 │   │   ├── App.css
@@ -154,6 +157,7 @@ app.use("/api/phieuthue", phieuthueRoutes);
 app.use("/api/loaikhach", loaikhachRoutes);
 app.use("/api/hoadon", hoadonRoutes);
 app.use("/api/baocao", baocaoRoutes);
+app.use("/api/quidinh", require("./routes/quidinhRoutes"));
 
 // Test API
 app.get("/api/test", (req, res) => {
@@ -249,15 +253,17 @@ const { v4: uuidv4 } = require("uuid");
 
 // --- HÀM LOGIC TÍNH TIỀN TRUNG TÂM ---
 const calculateBill = async (soPhieu) => {
-    // 1. Lấy thông tin phiếu, phòng, đơn giá
+    // 1. Lấy thông tin phiếu & Tham số quy định (Giữ nguyên)
     const sqlBase = `
         SELECT pt.SoPhieu, pt.MaPhong, pt.NgayBatDauThue, pt.NgayDuKienTra, 
                p.TenPhong, lp.DonGia, lp.TenLoaiPhong,
+               ts.SoKhachKhongTinhPhuThu, -- VD: 2
                (SELECT HoTen FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as TenKhachDaiDien,
                (SELECT DiaChi FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as DiaChi
         FROM phieuthue pt
         JOIN phong p ON pt.MaPhong = p.MaPhong
         JOIN loaiphong lp ON p.MaLoaiPhong = lp.MaLoaiPhong
+        CROSS JOIN thamso ts 
         WHERE pt.SoPhieu = ?
     `;
     
@@ -265,7 +271,7 @@ const calculateBill = async (soPhieu) => {
     if (rows.length === 0) throw new Error("Phiếu thuê không tồn tại");
     const data = rows[0];
 
-    // 2. Lấy danh sách khách... 
+    // 2. Đếm số khách thực tế
     const sqlKhach = `
         SELECT lk.MaLoaiKhach, lk.HeSoPhuThu 
         FROM ct_phieuthue ct
@@ -276,44 +282,48 @@ const calculateBill = async (soPhieu) => {
     const [dsKhach] = await db.promise().query(sqlKhach, [soPhieu]);
     const soLuongKhach = dsKhach.length;
 
-    // 3. Xử lý logic tính số ngày
+    // 3. Tính số ngày
     const ngayBatDau = new Date(data.NgayBatDauThue);
-    
-    // Nếu data.NgayDuKienTra bị null (lỗi dữ liệu cũ) thì lấy ngày hiện tại
     const ngayKetThuc = data.NgayDuKienTra ? new Date(data.NgayDuKienTra) : new Date(); 
+    let soNgay = Math.ceil((Math.abs(ngayKetThuc - ngayBatDau)) / (1000 * 60 * 60 * 24));
+    if (soNgay <= 0) soNgay = 1;
 
-    // Tính số mili-giây chênh lệch
-    const diffTime = Math.abs(ngayKetThuc - ngayBatDau);
-    // Chuyển sang ngày (làm tròn lên)
-    let soNgay = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    // --- 4. Tính tiền ---
     
-    if (soNgay <= 0) soNgay = 1; // Ở chưa được 1 ngày thì tính là 1 ngày
-
-    // 4. LOGIC LINH HOẠT
-    
-    // A. Hệ Số Khách Nước Ngoài
+    // A. Hệ số khách nước ngoài
     let heSoKhach = 1.0;
     if (dsKhach.length > 0) {
         heSoKhach = Math.max(...dsKhach.map(k => k.HeSoPhuThu));
     }
 
-    // B. Phụ thu số lượng khách
+    // B. Phụ thu số lượng khách (TRA BẢNG TRỰC TIẾP)
     let tiLePhuThu = 0;
-    const [resTiLe] = await db.promise().query(
-        "SELECT TiLePhuThu FROM tilephuthu WHERE KhachThu = ?", 
-        [soLuongKhach]
-    );
+    const soKhachMienPhi = data.SoKhachKhongTinhPhuThu; // VD: 2
+    const soKhachDuRa = soLuongKhach - soKhachMienPhi;  // VD: 4 - 2 = 2 khách dư
 
-    if (resTiLe.length > 0) {
-        tiLePhuThu = resTiLe[0].TiLePhuThu;
-    } else {
-        const [maxTiLe] = await db.promise().query("SELECT TiLePhuThu FROM tilephuthu ORDER BY KhachThu DESC LIMIT 1");
-        if (maxTiLe.length > 0 && soLuongKhach > 2) {
-             tiLePhuThu = maxTiLe[0].TiLePhuThu; 
+    if (soKhachDuRa > 0) {
+        // Query trực tiếp: "Nếu dư X người thì tỉ lệ là bao nhiêu?"
+        const [resTiLe] = await db.promise().query(
+            "SELECT TiLePhuThu FROM tilephuthu WHERE KhachThu = ?", 
+            [soKhachDuRa]
+        );
+        
+        if (resTiLe.length > 0) {
+            // Trường hợp 1: Có trong bảng (VD: dư 1 hoặc 2 người)
+            tiLePhuThu = parseFloat(resTiLe[0].TiLePhuThu);
+        } else {
+            // Trường hợp 2: Số khách dư vượt quá bảng (VD: dư 5 người mà bảng chỉ có 2 dòng)
+            // Lấy dòng có KhachThu lớn nhất làm mốc (hoặc bạn có thể return lỗi)
+            const [maxRes] = await db.promise().query(
+                "SELECT TiLePhuThu FROM tilephuthu ORDER BY KhachThu DESC LIMIT 1"
+            );
+            if (maxRes.length > 0) {
+                tiLePhuThu = parseFloat(maxRes[0].TiLePhuThu);
+            }
         }
     }
 
-    // 5. TÍNH TỔNG TIỀN
+    // 5. Tính tổng tiền
     const donGia = parseFloat(data.DonGia);
     const thanhTien = (donGia * soNgay * (1 + tiLePhuThu)) * heSoKhach;
 
@@ -321,7 +331,7 @@ const calculateBill = async (soPhieu) => {
         ...data,
         SoNgay: soNgay,
         SoKhach: soLuongKhach,
-        TiLePhuThu: tiLePhuThu,
+        TiLePhuThu: tiLePhuThu, 
         HeSoKhach: heSoKhach,
         ThanhTien: Math.round(thanhTien)
     };
@@ -718,6 +728,171 @@ exports.deleteRoom = async (req, res) => {
 
 ```
 
+### backend\controllers\quidinhController.js
+```js
+const db = require("../config/db");
+
+// --- 1. LOẠI PHÒNG ---
+exports.getLoaiPhong = async (req, res) => {
+    try {
+        const sql = `
+            SELECT lp.*, 
+            (SELECT COUNT(*) FROM phong WHERE MaLoaiPhong = lp.MaLoaiPhong) as CoDuLieu 
+            FROM loaiphong lp 
+            ORDER BY lp.MaLoaiPhong
+        `;
+        const [rows] = await db.promise().query(sql);
+        res.json(rows);
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+exports.createLoaiPhong = async (req, res) => {
+    try {
+        const { maLoai, tenLoai, donGia } = req.body;
+        await db.promise().query("INSERT INTO loaiphong (MaLoaiPhong, TenLoaiPhong, DonGia) VALUES (?, ?, ?)", [maLoai, tenLoai, donGia]);
+        res.json({ message: "Thêm thành công" });
+    } catch (err) { res.status(500).json({ message: "Lỗi: Mã loại phòng có thể đã tồn tại" }); }
+};
+
+exports.updateLoaiPhong = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { tenLoai, donGia, dangSuDung } = req.body;
+        await db.promise().query(
+            "UPDATE loaiphong SET TenLoaiPhong = ?, DonGia = ?, DangSuDung = ? WHERE MaLoaiPhong = ?", 
+            [tenLoai, donGia, dangSuDung, id]
+        );
+        res.json({ message: "Cập nhật thành công" });
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+exports.deleteLoaiPhong = async (req, res) => {
+    try {
+        const { id } = req.params;
+        // Kiểm tra xem đã có phòng nào thuộc loại này chưa
+        const [check] = await db.promise().query("SELECT COUNT(*) as count FROM phong WHERE MaLoaiPhong = ?", [id]);
+        
+        if (check[0].count > 0) {
+            return res.status(400).json({ 
+                error: "DATA_EXIST", 
+                message: "Không thể xóa vì đã có phòng thuộc loại này. Hãy chuyển sang 'Ngưng hoạt động'." 
+            });
+        }
+
+        await db.promise().query("DELETE FROM loaiphong WHERE MaLoaiPhong = ?", [id]);
+        res.json({ message: "Xóa thành công" });
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+// --- 2. LOẠI KHÁCH ---
+exports.getLoaiKhach = async (req, res) => {
+    try {
+        const sql = `
+            SELECT lk.*, 
+            (SELECT COUNT(*) FROM khachhang WHERE MaLoaiKhach = lk.MaLoaiKhach) as CoDuLieu 
+            FROM loaikhach lk 
+            ORDER BY lk.MaLoaiKhach
+        `;
+        const [rows] = await db.promise().query(sql);
+        res.json(rows);
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+exports.createLoaiKhach = async (req, res) => {
+    try {
+        const { maLoai, tenLoai, heSo } = req.body;
+        // Mặc định DangSuDung = 1 khi tạo mới
+        await db.promise().query(
+            "INSERT INTO loaikhach (MaLoaiKhach, TenLoaiKhach, HeSoPhuThu, DangSuDung) VALUES (?, ?, ?, 1)", 
+            [maLoai, tenLoai, heSo]
+        );
+        res.json({ message: "Thêm loại khách thành công" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Lỗi: Mã loại khách có thể đã tồn tại" }); 
+    }
+};
+
+exports.updateLoaiKhach = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { tenLoai, heSo, dangSuDung } = req.body;
+        await db.promise().query(
+            "UPDATE loaikhach SET TenLoaiKhach = ?, HeSoPhuThu = ?, DangSuDung = ? WHERE MaLoaiKhach = ?", 
+            [tenLoai, heSo, dangSuDung, id]
+        );
+        res.json({ message: "Cập nhật thành công" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: err.message }); 
+    }
+};
+
+exports.deleteLoaiKhach = async (req, res) => {
+    try {
+        const { id } = req.params;
+        // Kiểm tra ràng buộc dữ liệu trước khi xóa
+        const [check] = await db.promise().query("SELECT COUNT(*) as count FROM khachhang WHERE MaLoaiKhach = ?", [id]);
+        
+        if (check[0].count > 0) {
+            return res.status(400).json({ 
+                error: "DATA_EXIST", 
+                message: "Không thể xóa vì đã có khách hàng thuộc loại này." 
+            });
+        }
+
+        await db.promise().query("DELETE FROM loaikhach WHERE MaLoaiKhach = ?", [id]);
+        res.json({ message: "Xóa thành công" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: err.message }); 
+    }
+};
+
+// --- 3. PHỤ THU ---
+exports.getPhuThu = async (req, res) => {
+    try {
+        // Phụ thu thì không có bảng liên kết trực tiếp (vì lưu giá trị vào hóa đơn), 
+        // nên ta giả định CoDuLieu = 0 để luôn cho phép xóa nếu muốn, 
+        // hoặc bạn có thể chỉ dùng tính năng Ngưng áp dụng.
+        const [rows] = await db.promise().query("SELECT * FROM tilephuthu ORDER BY KhachThu");
+        res.json(rows);
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+exports.updatePhuThu = async (req, res) => {
+    try {
+        const { khachThu, tiLe, dangSuDung } = req.body; // Thêm dangSuDung
+        // Upsert cập nhật cả trạng thái
+        const sql = `INSERT INTO tilephuthu (KhachThu, TiLePhuThu, DangSuDung) VALUES (?, ?, ?) 
+                     ON DUPLICATE KEY UPDATE TiLePhuThu = ?, DangSuDung = ?`;
+        await db.promise().query(sql, [khachThu, tiLe, dangSuDung, tiLe, dangSuDung]);
+        res.json({ message: "Lưu thành công" });
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+exports.deletePhuThu = async (req, res) => {
+    try {
+        const { id } = req.params;
+        await db.promise().query("DELETE FROM tilephuthu WHERE KhachThu = ?", [id]);
+        res.json({ message: "Xóa thành công" });
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+// --- 4. THAM SỐ ---
+exports.getThamSo = async (req, res) => {
+    try { const [rows] = await db.promise().query("SELECT * FROM thamso LIMIT 1"); res.json(rows[0]); } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+exports.updateThamSo = async (req, res) => {
+    try {
+        const { soKhachToiDa, soKhachKhongTinhPhuThu } = req.body;
+        await db.promise().query("UPDATE thamso SET SoKhachToiDa = ?, SoKhachKhongTinhPhuThu = ?", [soKhachToiDa, soKhachKhongTinhPhuThu]);
+        res.json({ message: "Cập nhật tham số thành công" });
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+```
+
 ### backend\middleware\authMiddleware.js
 ```js
 const jwt = require("jsonwebtoken");
@@ -931,18 +1106,12 @@ exports.getAll = () => {
         p.*, 
         lp.TenLoaiPhong, 
         lp.DonGia,
+        lp.DangSuDung AS TrangThaiLoaiPhong, 
         pt.NgayBatDauThue,
         pt.NgayDuKienTra,
-        (SELECT kh.HoTen 
-         FROM khachhang kh 
-         JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH 
-         WHERE ct.SoPhieu = pt.SoPhieu 
-         LIMIT 1) AS TenKhach,
-        (SELECT kh.SDT 
-         FROM khachhang kh 
-         JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH 
-         WHERE ct.SoPhieu = pt.SoPhieu 
-         LIMIT 1) AS SDTKhach
+        (SELECT COUNT(*) FROM phieuthue WHERE MaPhong = p.MaPhong) AS CoLichSu,
+        (SELECT kh.HoTen FROM khachhang kh JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH WHERE ct.SoPhieu = pt.SoPhieu LIMIT 1) AS TenKhach,
+        (SELECT kh.SDT FROM khachhang kh JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH WHERE ct.SoPhieu = pt.SoPhieu LIMIT 1) AS SDTKhach
     FROM PHONG p
     JOIN LOAIPHONG lp ON p.MaLoaiPhong = lp.MaLoaiPhong
     LEFT JOIN PHIEUTHUE pt ON p.MaPhong = pt.MaPhong AND pt.TrangThaiLuuTru = 'DANG_THUE'
@@ -1204,6 +1373,36 @@ module.exports = router;
 
 ```
 
+### backend\routes\quidinhRoutes.js
+```js
+const express = require("express");
+const router = express.Router();
+const controller = require("../controllers/quidinhController");
+
+// Loại phòng
+router.get("/loaiphong", controller.getLoaiPhong);
+router.post("/loaiphong", controller.createLoaiPhong);
+router.put("/loaiphong/:id", controller.updateLoaiPhong);
+router.delete("/loaiphong/:id", controller.deleteLoaiPhong);
+
+// Loại khách
+router.get("/loaikhach", controller.getLoaiKhach);
+router.post("/loaikhach", controller.createLoaiKhach);
+router.put("/loaikhach/:id", controller.updateLoaiKhach);
+router.delete("/loaikhach/:id", controller.deleteLoaiKhach);
+
+// Phụ thu
+router.get("/phuthu", controller.getPhuThu);
+router.post("/phuthu", controller.updatePhuThu);
+router.delete("/phuthu/:id", controller.deletePhuThu);
+
+// Tham số
+router.get("/thamso", controller.getThamSo);
+router.put("/thamso", controller.updateThamSo);
+
+module.exports = router;
+```
+
 ### backend\routes\thamSoRoutes.js
 ```js
 const express = require("express");
@@ -1309,6 +1508,7 @@ import BookingManagement from "./pages/BookingManagement";
 import InvoiceManagement from "./pages/InvoiceManagement";
 import RoomSearch from "./pages/RoomSearch";
 import ReportManagement from "./pages/ReportManagement";
+import Settings from "./pages/Settings";
 
 function PrivateLayout({ children }) {
   const token = localStorage.getItem("token");
@@ -1357,7 +1557,6 @@ function App() {
           }
         />
 
-        {/* Các trang còn lại bạn sẽ thêm sau */}
         <Route
           path="/phieuthue"
           element={
@@ -1390,6 +1589,15 @@ function App() {
           element={
             <PrivateLayout>
               <ReportManagement />
+            </PrivateLayout>
+          }
+        />
+
+        <Route
+          path="/settings"
+          element={
+            <PrivateLayout>
+              <Settings />
             </PrivateLayout>
           }
         />
@@ -1659,7 +1867,12 @@ const BookingManagement = () => {
         api.get("/thamso/sokhachMax"),
       ]);
       setBookings(bRes.data);
-      setRooms(rRes.data.filter((r) => r.TinhTrang === "Trống"));
+      setRooms(rRes.data.filter((r) => {
+          const isTrong = r.TinhTrang === "Trống";
+          const isLoaiActive = r.TrangThaiLoaiPhong === 1; 
+          
+          return isTrong && isLoaiActive;
+      }));
       setGuestTypes(gRes.data);
       setSoKhachToiDa(maxRes.data.soKhachToiDa);
     } catch (error) {
@@ -3355,7 +3568,6 @@ const ReportManagement = () => {
   const handleCreateReport = async () => {
     setLoading(true);
     try {
-      // Nếu chọn năm thì không gửi param 'thang'
       let url = `/baocao/doanhthu?nam=${year}`;
       if (reportType === 'month') {
           url += `&thang=${month}`;
@@ -3374,7 +3586,39 @@ const ReportManagement = () => {
     }
   };
 
-  // ✅ HÀM IN BÁO CÁO
+  // ✅ HÀM TÍNH TOÁN DÒNG CHỮ NGÀY THÁNG (MỚI)
+  const renderTimeText = () => {
+      const today = new Date();
+      const currentMonth = today.getMonth() + 1;
+      const currentYear = today.getFullYear();
+      const currentDay = today.getDate();
+
+      // Format ngày dd/mm/yyyy
+      const fmt = (d, m, y) => `${String(d).padStart(2,'0')}/${String(m).padStart(2,'0')}/${y}`;
+
+      // 1. Trường hợp theo THÁNG
+      if (reportType === 'month') {
+          // Nếu chọn tháng hiện tại của năm hiện tại
+          if (Number(year) === currentYear && Number(month) === currentMonth) {
+              return `(Tính đến ngày: ${fmt(currentDay, currentMonth, currentYear)})`;
+          } 
+          // Nếu chọn tháng trong quá khứ (hoặc tương lai)
+          else {
+              // Lấy ngày cuối cùng của tháng đó (mẹo: ngày 0 của tháng kế tiếp)
+              const lastDay = new Date(year, month, 0).getDate(); 
+              return `(Từ ngày 01/${month}/${year} đến ngày ${lastDay}/${month}/${year})`;
+          }
+      } 
+      // 2. Trường hợp theo NĂM
+      else {
+          if (Number(year) === currentYear) {
+              return `(Tính đến ngày: ${fmt(currentDay, currentMonth, currentYear)})`;
+          } else {
+              return `(Năm tài chính ${year})`;
+          }
+      }
+  };
+
   const handlePrint = () => {
       const printContent = document.getElementById("report-print-section");
       const windowUrl = 'about:blank';
@@ -3393,11 +3637,15 @@ const ReportManagement = () => {
                       .text-right { text-align: right; }
                       .total-row { font-weight: bold; font-size: 1.1em; }
                       h1 { text-transform: uppercase; margin-bottom: 5px; }
+                      .subtitle { font-style: italic; font-size: 14px; margin-bottom: 20px; }
                   </style>
               </head>
               <body>
                   <h1>Báo Cáo Doanh Thu</h1>
-                  <p>Thời gian: ${reportType === 'month' ? `Tháng ${month}` : 'Cả năm'} / ${year}</p>
+                  <p class="subtitle">
+                    ${reportType === 'month' ? `Tháng ${month}` : 'Năm'} / ${year} <br/>
+                    ${renderTimeText()}
+                  </p>
                   ${printContent.innerHTML}
               </body>
           </html>
@@ -3417,40 +3665,23 @@ const ReportManagement = () => {
         <p style={styles.subtitle}>Xem doanh thu theo tháng/năm và tỷ lệ từng loại phòng</p>
       </div>
 
-      {/* FILTER CARD */}
       <div style={styles.filterCard}>
-        {/* Chọn loại báo cáo */}
         <div style={{marginBottom: '15px', display: 'flex', gap: '20px'}}>
             <label style={{cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px'}}>
-                <input 
-                    type="radio" 
-                    name="rptType" 
-                    checked={reportType === 'month'} 
-                    onChange={() => setReportType('month')}
-                /> 
+                <input type="radio" name="rptType" checked={reportType === 'month'} onChange={() => setReportType('month')}/> 
                 Theo Tháng
             </label>
             <label style={{cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px'}}>
-                <input 
-                    type="radio" 
-                    name="rptType" 
-                    checked={reportType === 'year'} 
-                    onChange={() => setReportType('year')}
-                /> 
+                <input type="radio" name="rptType" checked={reportType === 'year'} onChange={() => setReportType('year')}/> 
                 Theo Năm
             </label>
         </div>
 
         <div style={styles.filterRow}>
-            {/* Chỉ hiện chọn tháng nếu là báo cáo tháng */}
             {reportType === 'month' && (
                 <div style={styles.formGroup}>
                     <label style={styles.label}>Tháng:</label>
-                    <select 
-                        value={month} 
-                        onChange={(e) => setMonth(e.target.value)}
-                        style={styles.select}
-                    >
+                    <select value={month} onChange={(e) => setMonth(e.target.value)} style={styles.select}>
                         {Array.from({length: 12}, (_, i) => i + 1).map(m => (
                             <option key={m} value={m}>Tháng {m}</option>
                         ))}
@@ -3460,33 +3691,29 @@ const ReportManagement = () => {
 
             <div style={styles.formGroup}>
                 <label style={styles.label}>Năm:</label>
-                <input 
-                    type="number" 
-                    value={year} 
-                    onChange={(e) => setYear(e.target.value)}
-                    style={styles.input}
-                />
+                <input type="number" value={year} onChange={(e) => setYear(e.target.value)} style={styles.input}/>
             </div>
 
-            <button 
-                onClick={handleCreateReport} 
-                style={styles.reportBtn}
-                disabled={loading}
-            >
+            <button onClick={handleCreateReport} style={styles.reportBtn} disabled={loading}>
                 {loading ? "⏳..." : "📊 Lập báo cáo"}
             </button>
         </div>
       </div>
 
-      {/* RESULT SECTION */}
       {reportData && (
         <div style={styles.resultSection}>
             <div style={styles.reportHeader}>
-                <h3 style={{margin: 0, color: '#1e293b'}}>
-                    KẾT QUẢ: {reportType === 'month' ? `THÁNG ${month}` : 'CẢ NĂM'} / {year}
-                </h3>
+                <div>
+                    <h3 style={{margin: 0, color: '#1e293b', textTransform: 'uppercase'}}>
+                        KẾT QUẢ: {reportType === 'month' ? `THÁNG ${month}` : 'CẢ NĂM'} / {year}
+                    </h3>
+                    
+                    {/* ✅ HIỂN THỊ DÒNG CHỮ TÍNH ĐẾN NGÀY Ở ĐÂY */}
+                    <span style={{fontSize: '14px', color: '#64748b', fontStyle: 'italic', marginTop: '5px', display: 'block'}}>
+                        {renderTimeText()}
+                    </span>
+                </div>
                 
-                {/* NÚT IN MỚI */}
                 <button style={styles.printBtn} onClick={handlePrint}>🖨️ In Báo Cáo</button>
             </div>
 
@@ -3544,7 +3771,6 @@ const ReportManagement = () => {
 };
 
 const styles = {
-  // ... (Các style cũ giữ nguyên: wrapper, header, title, subtitle, filterCard, select, input, reportBtn...)
   wrapper: { padding: "2rem 3rem", background: "#F5F8FF", minHeight: "100vh" },
   header: { marginBottom: "2rem" },
   title: { fontSize: "2rem", fontWeight: "700", color: "#1F2A40", margin: 0 },
@@ -3555,17 +3781,8 @@ const styles = {
   label: { fontSize: "14px", fontWeight: "600", color: "#334155" },
   select: { padding: "10px 15px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "15px", minWidth: "150px", outline: "none" },
   input: { padding: "10px 15px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "15px", width: "100px", outline: "none" },
-  
-  reportBtn: {
-      padding: "10px 24px", background: "#3A7DFF", color: "white", border: "none", borderRadius: "8px", 
-      fontSize: "15px", fontWeight: "600", cursor: "pointer", boxShadow: "0 4px 6px rgba(58, 125, 255, 0.3)", height: "42px"
-  },
-  // Nút in
-  printBtn: {
-      padding: "8px 16px", background: "#fff", color: "#334155", border: "1px solid #cbd5e1", borderRadius: "6px",
-      fontSize: "14px", fontWeight: "600", cursor: "pointer", display: 'flex', alignItems: 'center', gap: '5px'
-  },
-
+  reportBtn: { padding: "10px 24px", background: "#3A7DFF", color: "white", border: "none", borderRadius: "8px", fontSize: "15px", fontWeight: "600", cursor: "pointer", boxShadow: "0 4px 6px rgba(58, 125, 255, 0.3)", height: "42px" },
+  printBtn: { padding: "8px 16px", background: "#fff", color: "#334155", border: "1px solid #cbd5e1", borderRadius: "6px", fontSize: "14px", fontWeight: "600", cursor: "pointer", display: 'flex', alignItems: 'center', gap: '5px' },
   resultSection: { animation: "fadeIn 0.5s ease-in-out" },
   reportHeader: { marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '10px' },
   tableCard: { background: "white", borderRadius: "16px", boxShadow: "0 4px 20px rgba(0,0,0,0.05)", overflow: "hidden" },
@@ -3609,9 +3826,8 @@ const RoomManagement = () => {
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   
-  // State tìm kiếm & Lọc
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterStatus, setFilterStatus] = useState("ALL"); // ✅ THÊM STATE LỌC TRẠNG THÁI
+  const [filterStatus, setFilterStatus] = useState("ALL");
 
   const isRented = form.tinhTrang === "Đã thuê";
 
@@ -3755,14 +3971,10 @@ const RoomManagement = () => {
       }
   }
 
-  // ✅ LOGIC LỌC KẾT HỢP (TỪ KHÓA + TRẠNG THÁI)
   const filteredRooms = rooms.filter((room) => {
-    // 1. Lọc theo trạng thái (Dropdown)
     if (filterStatus !== "ALL" && room.TinhTrang !== filterStatus) {
         return false;
     }
-
-    // 2. Lọc theo từ khóa (Input)
     if (!searchTerm) return true;
     const lowerTerm = searchTerm.toLowerCase();
     return (
@@ -3785,7 +3997,6 @@ const RoomManagement = () => {
         </div>
         
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            {/* ✅ THÊM DROPDOWN LỌC TRẠNG THÁI */}
             <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
@@ -3798,7 +4009,6 @@ const RoomManagement = () => {
                 <option value="Ngưng kinh doanh">Ngưng kinh doanh</option>
             </select>
 
-            {/* Ô tìm kiếm */}
             <div style={{position: 'relative'}}>
                 <input 
                     type="text" 
@@ -3847,25 +4057,41 @@ const RoomManagement = () => {
                     </td>
                 </tr>
             ) : filteredRooms.map((room) => {
-              const isStopped = room.TinhTrang === 'Ngưng kinh doanh';
-              const hasHistory = room.CoLichSu > 0; 
+              // Trạng thái Ngưng kinh doanh của chính phòng đó
+              const isRoomStopped = room.TinhTrang === 'Ngưng kinh doanh';
+              // ✅ Trạng thái Ngưng kinh doanh của LOẠI PHÒNG (Lấy từ backend)
+              const isTypeStopped = room.TrangThaiLoaiPhong === 0;
+              // Có lịch sử hay chưa
+              const hasHistory = (room.CoLichSu || 0) > 0; 
+
+              // Phòng bị coi là inactive nếu: Chính nó bị ngưng HOẶC Loại phòng của nó bị ngưng
+              const isInactive = isRoomStopped || isTypeStopped;
 
               return (
                 <tr 
                     key={room.MaPhong} 
                     style={{
                         ...styles.tr,
-                        backgroundColor: isStopped ? '#F3F4F6' : 'white',
-                        opacity: isStopped ? 0.6 : 1
+                        // Nền xám nếu inactive
+                        backgroundColor: isInactive ? '#F3F4F6' : 'white',
+                        opacity: isInactive ? 0.7 : 1
                     }}
                 >
                   <td style={styles.td}>{room.MaPhong}</td>
                   <td style={styles.td}>{room.TenPhong}</td>
 
                   <td style={styles.td}>
-                    <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
-                      {room.TenLoaiPhong || room.MaLoaiPhong}
-                    </span>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+                        <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
+                            {room.TenLoaiPhong || room.MaLoaiPhong}
+                        </span>
+                        {/* ✅ Badge cảnh báo nếu Loại phòng bị ngưng */}
+                        {isTypeStopped && (
+                            <span style={{fontSize: '10px', background: '#374151', color: 'white', padding: '2px 6px', borderRadius: '4px'}}>
+                                ⛔ Loại đã ngưng
+                            </span>
+                        )}
+                    </div>
                   </td>
 
                   <td style={styles.td}>
@@ -3875,9 +4101,14 @@ const RoomManagement = () => {
                   </td>
 
                   <td style={{ ...styles.td, textAlign: "center" }}>
-                    <span style={statusBadgeStyle(room.TinhTrang)}>
-                      {room.TinhTrang}
-                    </span>
+                    {/* ✅ Nếu Loại bị ngưng và phòng đang trống -> Hiện "Tạm ngưng" */}
+                    {isTypeStopped && room.TinhTrang === 'Trống' ? (
+                        <span style={styles.inactiveBadge}>⛔ Tạm ngưng</span>
+                    ) : (
+                        <span style={statusBadgeStyle(room.TinhTrang)}>
+                            {room.TinhTrang}
+                        </span>
+                    )}
                   </td>
 
                   <td style={styles.td}>{room.GhiChu}</td>
@@ -3885,7 +4116,8 @@ const RoomManagement = () => {
                   <td style={{ ...styles.td, textAlign: "center" }}>
                     <div style={styles.actionRow}>
                       
-                      {isStopped ? (
+                      {/* 1. Nếu chính phòng này bị Ngưng (do người dùng bấm nút Ngưng KD) */}
+                      {isRoomStopped ? (
                           <button 
                             style={styles.activateBtn}
                             onClick={() => handleBusinessStatus(room, 'active')}
@@ -3893,7 +4125,22 @@ const RoomManagement = () => {
                           >
                             🔄 Kích hoạt
                           </button>
+                      ) : isTypeStopped ? (
+                          /* 2. Nếu Loại phòng bị Ngưng -> Chỉ cho xem hoặc xóa (nếu ko có lịch sử), ko cho sửa/bảo trì */
+                          <>
+                             {hasHistory ? (
+                                 <span style={{fontSize: '12px', color: '#6b7280', fontStyle: 'italic'}}>Không khả dụng</span>
+                             ) : (
+                                <button
+                                  style={styles.deleteButton}
+                                  onClick={() => handleDelete(room.MaPhong)}
+                                >
+                                  Xoá
+                                </button>
+                             )}
+                          </>
                       ) : (
+                          /* 3. Bình thường: Hiện đủ nút */
                           <>
                             <button
                               style={styles.editButton}
@@ -3940,7 +4187,6 @@ const RoomManagement = () => {
         </table>
       </div>
 
-      {/* MODAL GIỮ NGUYÊN NHƯ CŨ */}
       {isModalOpen && (
         <div style={styles.modalOverlay} onClick={closeModal}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -4074,7 +4320,6 @@ const styles = {
     marginTop: "0.3rem",
     color: "#6B7280",
   },
-  // ✅ Style cho ô tìm kiếm và select
   searchInput: {
     padding: "0.6rem 1rem",
     borderRadius: "8px",
@@ -4206,6 +4451,11 @@ const styles = {
     cursor: "pointer",
     fontSize: "0.875rem",
     fontWeight: "bold",
+  },
+  // Badge xám cho trạng thái inactive
+  inactiveBadge: {
+      display: "inline-block", padding: "6px 12px", borderRadius: "20px", fontWeight: 600, fontSize: "0.85rem", 
+      backgroundColor: "#e5e7eb", color: "#6b7280", minWidth: "80px", textAlign: 'center', border: '1px solid #d1d5db'
   },
   modalOverlay: {
     position: "fixed",
@@ -4435,9 +4685,7 @@ const RoomSearch = () => {
             <tr>
               <th style={styles.th}>Phòng</th>
               <th style={styles.th}>Loại & Giá</th>
-              {/* CỘT MỚI 1 */}
               <th style={styles.th}>Khách đang ở</th>
-              {/* CỘT MỚI 2 */}
               <th style={styles.th}>Thời gian lưu trú</th>
               <th style={{ ...styles.th, textAlign: "center" }}>Tình trạng</th>
               <th style={styles.th}>Ghi chú</th>
@@ -4453,24 +4701,40 @@ const RoomSearch = () => {
                 </tr>
             ) : filteredRooms.map((room, idx) => {
               const isOccupied = room.TinhTrang === 'Đã thuê';
+              // ✅ KIỂM TRA LOẠI PHÒNG CÓ BỊ NGƯNG KHÔNG
+              // Backend trả về TrangThaiLoaiPhong: 1 (Active) hoặc 0 (Inactive)
+              const isTypeInactive = room.TrangThaiLoaiPhong === 0; 
               
               return (
                 <tr 
                     key={room.MaPhong} 
                     style={{
                         ...styles.tr,
-                        backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc',
+                        // Nếu loại phòng bị ngưng -> Nền xám, mờ đi
+                        backgroundColor: isTypeInactive ? '#f3f4f6' : (idx % 2 === 0 ? '#ffffff' : '#f8fafc'),
+                        opacity: isTypeInactive ? 0.7 : 1,
                     }}
                 >
                   <td style={styles.td}>
-                      <div style={{fontWeight: 'bold', color: '#1e293b', fontSize: '1rem'}}>{room.TenPhong}</div>
+                      <div style={{fontWeight: 'bold', color: '#1e293b', fontSize: '1rem'}}>
+                          {room.TenPhong}
+                      </div>
                       <span style={styles.codeBadge}>{room.MaPhong}</span>
                   </td>
 
                   <td style={styles.td}>
-                    <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
-                      {room.TenLoaiPhong || room.MaLoaiPhong}
-                    </span>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}>
+                        <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
+                        {room.TenLoaiPhong || room.MaLoaiPhong}
+                        </span>
+                        {/* ✅ HIỂN THỊ CẢNH BÁO NẾU LOẠI PHÒNG BỊ NGƯNG */}
+                        {isTypeInactive && (
+                            <span style={{fontSize: '10px', background: '#374151', color: 'white', padding: '2px 6px', borderRadius: '4px'}}>
+                                ⛔ Ngưng KD
+                            </span>
+                        )}
+                    </div>
+                    
                     <div style={{marginTop: '4px', fontSize: '0.85rem', color: '#64748b'}}>
                         {Number(room.DonGia).toLocaleString("vi-VN")} đ
                     </div>
@@ -4501,9 +4765,14 @@ const RoomSearch = () => {
                   </td>
 
                   <td style={{ ...styles.td, textAlign: "center" }}>
-                    <span style={statusBadgeStyle(room.TinhTrang)}>
-                      {room.TinhTrang}
-                    </span>
+                    {/* Nếu loại phòng Ngưng KD nhưng phòng đang trống -> Hiện trạng thái đặc biệt */}
+                    {isTypeInactive && !isOccupied ? (
+                        <span style={styles.inactiveBadge}>⛔ Tạm ngưng</span>
+                    ) : (
+                        <span style={statusBadgeStyle(room.TinhTrang)}>
+                            {room.TinhTrang}
+                        </span>
+                    )}
                   </td>
 
                   <td style={{...styles.td, color: '#64748b', fontStyle: 'italic', fontSize: '0.85rem'}}>
@@ -4534,7 +4803,13 @@ const styles = {
   th: { padding: "16px 24px", backgroundColor: "#f8fafc", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#475569", textAlign: "left", textTransform: "uppercase", fontSize: "0.8rem", letterSpacing: "0.05em" },
   tr: { borderBottom: "1px solid #f1f5f9", transition: 'background 0.2s' },
   td: { padding: "16px 24px", verticalAlign: "middle" },
-  codeBadge: { fontFamily: 'monospace', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', color: '#64748b', fontSize: '0.8rem', marginLeft: '0px' }
+  codeBadge: { fontFamily: 'monospace', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', color: '#64748b', fontSize: '0.8rem', marginLeft: '0px' },
+  
+  // Style cho badge trạng thái ngưng
+  inactiveBadge: {
+      display: "inline-block", padding: "6px 12px", borderRadius: "20px", fontWeight: 600, fontSize: "0.8rem", 
+      backgroundColor: "#e5e7eb", color: "#6b7280", minWidth: "90px", textAlign: 'center', border: '1px solid #d1d5db'
+  }
 };
 
 const loaiPhongBadgeStyle = (loai) => {
@@ -4552,6 +4827,278 @@ const statusBadgeStyle = (status) => {
 };
 
 export default RoomSearch;
+```
+
+### frontend\src\pages\Settings.jsx
+```jsx
+import React, { useState, useEffect } from "react";
+import api from "../services/api";
+
+const Settings = () => {
+  const [activeTab, setActiveTab] = useState("loaiphong");
+  
+  const [loaiPhongs, setLoaiPhongs] = useState([]);
+  const [loaiKhachs, setLoaiKhachs] = useState([]);
+  const [phuThus, setPhuThus] = useState([]);
+  const [thamSo, setThamSo] = useState({ SoKhachToiDa: 0, SoKhachKhongTinhPhuThu: 0 });
+  const [loading, setLoading] = useState(false);
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  const [form, setForm] = useState({});
+
+  useEffect(() => { fetchData(); }, [activeTab]);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+        if (activeTab === 'loaiphong') setLoaiPhongs((await api.get('/quidinh/loaiphong')).data);
+        else if (activeTab === 'loaikhach') setLoaiKhachs((await api.get('/quidinh/loaikhach')).data);
+        else if (activeTab === 'phuthu') setPhuThus((await api.get('/quidinh/phuthu')).data);
+        else if (activeTab === 'thamso') setThamSo((await api.get('/quidinh/thamso')).data || {});
+    } catch (err) { console.error(err); } finally { setLoading(false); }
+  };
+
+  const formatCurrency = (value) => {
+      if (!value && value !== 0) return '';
+      return Number(value).toLocaleString('en-US');
+  };
+
+  const parseCurrency = (value) => {
+      return value.replace(/,/g, ''); 
+  };
+
+  const handleToggleStatus = async (item, type) => {
+      const newStatus = item.DangSuDung ? 0 : 1;
+      const actionName = newStatus ? "Kích hoạt" : "Ngưng áp dụng";
+      if(!window.confirm(`Bạn muốn ${actionName} mục này?`)) return;
+      
+      try {
+          if (type === 'loaiphong') await api.put(`/quidinh/loaiphong/${item.MaLoaiPhong}`, { tenLoai: item.TenLoaiPhong, donGia: item.DonGia, dangSuDung: newStatus });
+          if (type === 'loaikhach') await api.put(`/quidinh/loaikhach/${item.MaLoaiKhach}`, { tenLoai: item.TenLoaiKhach, heSo: item.HeSoPhuThu, dangSuDung: newStatus });
+          if (type === 'phuthu') await api.post(`/quidinh/phuthu`, { khachThu: item.KhachThu, tiLe: item.TiLePhuThu, dangSuDung: newStatus });
+          
+          alert(`✅ Đã ${actionName} thành công!`); fetchData();
+      } catch (err) { alert("Lỗi: " + err.message); }
+  };
+
+  const handleDelete = async (id, type) => {
+      if(!window.confirm("⚠️ Dữ liệu này chưa được sử dụng. Bạn có chắc chắn muốn XÓA VĨNH VIỄN?")) return;
+      try { await api.delete(`/quidinh/${type}/${id}`); alert("✅ Đã xóa thành công!"); fetchData(); } 
+      catch (err) { alert("Lỗi: " + err.message); }
+  };
+
+  const handleSave = async () => {
+      try {
+          // Lưu ý: Luôn giữ nguyên trạng thái cũ (editingItem.DangSuDung) hoặc mặc định là 1 nếu thêm mới
+          const currentStatus = editingItem ? editingItem.DangSuDung : 1;
+
+          if (activeTab === 'loaiphong') {
+              const payload = { maLoai: form.MaLoaiPhong, tenLoai: form.TenLoaiPhong, donGia: parseCurrency(form.DonGia.toString()), dangSuDung: currentStatus };
+              if (editingItem) await api.put(`/quidinh/loaiphong/${editingItem.MaLoaiPhong}`, payload);
+              else await api.post(`/quidinh/loaiphong`, payload);
+          } else if (activeTab === 'loaikhach') {
+              const payload = { maLoai: form.MaLoaiKhach, tenLoai: form.TenLoaiKhach, heSo: form.HeSoPhuThu, dangSuDung: currentStatus };
+              if (editingItem) await api.put(`/quidinh/loaikhach/${editingItem.MaLoaiKhach}`, payload);
+              else await api.post(`/quidinh/loaikhach`, payload);
+          } else if (activeTab === 'phuthu') {
+              await api.post(`/quidinh/phuthu`, { khachThu: form.KhachThu, tiLe: form.TiLePhuThu, dangSuDung: currentStatus });
+          }
+          alert("✅ Lưu dữ liệu thành công!"); setIsModalOpen(false); fetchData();
+      } catch (err) { alert("❌ Lỗi: " + (err.response?.data?.message || err.message)); }
+  };
+
+  const handleSaveThamSo = async () => {
+      try { await api.put(`/quidinh/thamso`, thamSo); alert("✅ Đã cập nhật tham số hệ thống!"); } catch (err) { alert("Lỗi cập nhật tham số"); }
+  };
+
+  const openModal = (item) => {
+      setEditingItem(item);
+      if (item) setForm({...item});
+      else {
+          if (activeTab === 'loaiphong') setForm({ MaLoaiPhong: '', TenLoaiPhong: '', DonGia: '' });
+          if (activeTab === 'loaikhach') setForm({ MaLoaiKhach: '', TenLoaiKhach: '', HeSoPhuThu: 1.0 });
+          if (activeTab === 'phuthu') setForm({ KhachThu: '', TiLePhuThu: 0.25 });
+      }
+      setIsModalOpen(true);
+  };
+
+  const renderActions = (item, id, type) => {
+      const isStopped = item.DangSuDung === 0;
+      const hasData = item.CoDuLieu > 0;
+      
+      if (isStopped) {
+          return <button style={styles.btnActivate} onClick={() => handleToggleStatus(item, type)}>🔄 Kích hoạt</button>;
+      }
+      return (
+          <div style={{display: 'flex', gap: '8px', justifyContent: 'center'}}>
+              <button style={styles.btnEdit} onClick={() => openModal(item)}>Sửa</button>
+              {hasData ? 
+                  <button style={styles.btnStop} onClick={() => handleToggleStatus(item, type)}>⛔ Ngưng KD</button> : 
+                  <button style={styles.btnDelete} onClick={() => handleDelete(id, type)}>Xóa</button>
+              }
+          </div>
+      );
+  };
+
+  return (
+    <div style={styles.wrapper}>
+      <div style={styles.headerRow}>
+        <div><h1 style={styles.title}>Cấu hình quy định</h1><p style={styles.subtitle}>Quản lý các danh mục loại phòng, loại khách và tham số hệ thống.</p></div>
+      </div>
+      
+      <div style={styles.tabContainer}>
+          <button style={activeTab === 'loaiphong' ? styles.tabActive : styles.tab} onClick={() => setActiveTab('loaiphong')}>Loại Phòng</button>
+          <button style={activeTab === 'loaikhach' ? styles.tabActive : styles.tab} onClick={() => setActiveTab('loaikhach')}>Loại Khách</button>
+          <button style={activeTab === 'phuthu' ? styles.tabActive : styles.tab} onClick={() => setActiveTab('phuthu')}>Phụ Thu</button>
+          <button style={activeTab === 'thamso' ? styles.tabActive : styles.tab} onClick={() => setActiveTab('thamso')}>Tham Số</button>
+      </div>
+
+      <div style={styles.content}>
+        {activeTab === 'loaiphong' && (
+            <div>
+                <div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '15px'}}><button style={styles.btnAdd} onClick={() => openModal(null)}>+ Thêm Loại Phòng</button></div>
+                <div style={styles.card}>
+                    <table style={styles.table}>
+                        <thead><tr><th style={styles.th}>Mã Loại</th><th style={styles.th}>Tên Loại Phòng</th><th style={{...styles.th, textAlign: 'right'}}>Đơn Giá</th><th style={{...styles.th, textAlign: 'center'}}>Trạng Thái</th><th style={{...styles.th, textAlign: 'center'}}>Hành động</th></tr></thead>
+                        <tbody>
+                            {loaiPhongs.map(item => (
+                                <tr key={item.MaLoaiPhong} style={{borderBottom: '1px solid #eee', background: item.DangSuDung ? 'white' : '#f9fafb', opacity: item.DangSuDung ? 1 : 0.7}}>
+                                    <td style={styles.td}><strong>{item.MaLoaiPhong}</strong></td><td style={styles.td}>{item.TenLoaiPhong}</td>
+                                    <td style={{...styles.td, textAlign: 'right', fontWeight: 'bold', color: '#2563eb'}}>{formatCurrency(item.DonGia)} VND</td>
+                                    <td style={{...styles.td, textAlign: 'center'}}><span style={item.DangSuDung ? styles.badgeActive : styles.badgeInactive}>{item.DangSuDung ? 'Đang dùng' : 'Ngưng dùng'}</span></td>
+                                    <td style={{...styles.td, textAlign: 'center'}}>{renderActions(item, item.MaLoaiPhong, 'loaiphong')}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        )}
+
+        {activeTab === 'loaikhach' && (
+            <div>
+                <div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '15px'}}><button style={styles.btnAdd} onClick={() => openModal(null)}>+ Thêm Loại Khách</button></div>
+                <div style={styles.card}>
+                    <table style={styles.table}>
+                        <thead><tr><th style={styles.th}>Mã Loại</th><th style={styles.th}>Tên Loại Khách</th><th style={{...styles.th, textAlign: 'right'}}>Hệ Số Phụ Thu</th><th style={{...styles.th, textAlign: 'center'}}>Trạng Thái</th><th style={{...styles.th, textAlign: 'center'}}>Hành động</th></tr></thead>
+                        <tbody>
+                            {loaiKhachs.map(item => (
+                                <tr key={item.MaLoaiKhach} style={{borderBottom: '1px solid #eee', background: item.DangSuDung ? 'white' : '#f9fafb', opacity: item.DangSuDung ? 1 : 0.7}}>
+                                    <td style={styles.td}><strong>{item.MaLoaiKhach}</strong></td><td style={styles.td}>{item.TenLoaiKhach}</td>
+                                    <td style={{...styles.td, textAlign: 'right', fontWeight: 'bold'}}>x {item.HeSoPhuThu}</td>
+                                    <td style={{...styles.td, textAlign: 'center'}}><span style={item.DangSuDung ? styles.badgeActive : styles.badgeInactive}>{item.DangSuDung ? 'Đang dùng' : 'Ngưng dùng'}</span></td>
+                                    <td style={{...styles.td, textAlign: 'center'}}>{renderActions(item, item.MaLoaiKhach, 'loaikhach')}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        )}
+
+        {activeTab === 'phuthu' && (
+            <div>
+                <div style={{display: 'flex', justifyContent: 'flex-end', marginBottom: '15px'}}><button style={styles.btnAdd} onClick={() => openModal(null)}>+ Thêm Mốc Phụ Thu</button></div>
+                <div style={styles.card}>
+                    <table style={styles.table}>
+                        <thead><tr><th style={styles.th}>Khách Dư Thứ...</th><th style={{...styles.th, textAlign: 'right'}}>Tỉ Lệ Phụ Thu</th><th style={{...styles.th, textAlign: 'center'}}>Trạng Thái</th><th style={{...styles.th, textAlign: 'center'}}>Hành động</th></tr></thead>
+                        <tbody>
+                            {phuThus.map(item => (
+                                <tr key={item.KhachThu} style={{borderBottom: '1px solid #eee', background: item.DangSuDung ? 'white' : '#f9fafb', opacity: item.DangSuDung ? 1 : 0.7}}>
+                                    <td style={styles.td}><strong>Khách thứ {item.KhachThu}</strong></td>
+                                    <td style={{...styles.td, textAlign: 'right', fontWeight: 'bold', color: '#d97706'}}>{item.TiLePhuThu * 100}%</td>
+                                    <td style={{...styles.td, textAlign: 'center'}}><span style={item.DangSuDung ? styles.badgeActive : styles.badgeInactive}>{item.DangSuDung ? 'Đang dùng' : 'Ngưng dùng'}</span></td>
+                                    <td style={{...styles.td, textAlign: 'center'}}>{renderActions(item, item.KhachThu, 'phuthu')}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        )}
+
+        {activeTab === 'thamso' && (
+            <div style={styles.card}>
+                <div style={{padding: '40px', maxWidth: '600px', margin: '0 auto'}}>
+                    <h3 style={{fontSize: '1.2rem', marginBottom: '20px', color: '#374151'}}>Quy định chung</h3>
+                    <div style={styles.formGroup}><label style={styles.label}>Số khách tối đa trong 1 phòng:</label><input type="number" style={styles.inputLarge} value={thamSo.SoKhachToiDa} onChange={e => setThamSo({...thamSo, SoKhachToiDa: e.target.value})}/></div>
+                    <div style={styles.formGroup}><label style={styles.label}>Số khách tiêu chuẩn (không tính phụ thu):</label><input type="number" style={styles.inputLarge} value={thamSo.SoKhachKhongTinhPhuThu} onChange={e => setThamSo({...thamSo, SoKhachKhongTinhPhuThu: e.target.value})}/></div>
+                    <div style={{textAlign: 'right', marginTop: '30px'}}><button style={styles.btnSave} onClick={handleSaveThamSo}>💾 Lưu Thay Đổi</button></div>
+                </div>
+            </div>
+        )}
+      </div>
+
+      {isModalOpen && (
+        <div style={styles.overlay} onClick={() => setIsModalOpen(false)}>
+            <div style={styles.modal} onClick={e => e.stopPropagation()}>
+                <h2 style={{marginTop: 0, marginBottom: '20px', borderBottom: '1px solid #eee', paddingBottom: '15px', fontSize: '1.5rem', color: '#111827'}}>{editingItem ? "Cập nhật thông tin" : "Thêm mới"}</h2>
+                
+                {activeTab === 'loaiphong' && (
+                    <div style={{marginTop: '20px'}}>
+                        <div style={styles.formGroup}><label style={styles.label}>Mã Loại (A, B, C...):</label><input style={styles.inputModal} disabled={editingItem} value={form.MaLoaiPhong} onChange={e => setForm({...form, MaLoaiPhong: e.target.value.toUpperCase()})}/></div>
+                        <div style={styles.formGroup}><label style={styles.label}>Tên Loại:</label><input style={styles.inputModal} value={form.TenLoaiPhong} onChange={e => setForm({...form, TenLoaiPhong: e.target.value})}/></div>
+                        <div style={styles.formGroup}><label style={styles.label}>Đơn Giá (VND):</label><input type="text" style={styles.inputModal} value={formatCurrency(form.DonGia)} onChange={e => {const raw = e.target.value.replace(/,/g, ''); if(!isNaN(raw)) setForm({...form, DonGia: raw});}}/></div>
+                    </div>
+                )}
+                {activeTab === 'loaikhach' && (
+                    <div style={{marginTop: '20px'}}>
+                        <div style={styles.formGroup}><label style={styles.label}>Mã Loại (NN, ND...):</label><input style={styles.inputModal} disabled={editingItem} value={form.MaLoaiKhach || ''} onChange={e => setForm({...form, MaLoaiKhach: e.target.value.toUpperCase()})}/></div>
+                        <div style={styles.formGroup}><label style={styles.label}>Tên Loại:</label><input style={styles.inputModal} value={form.TenLoaiKhach || ''} onChange={e => setForm({...form, TenLoaiKhach: e.target.value})}/></div>
+                        <div style={styles.formGroup}><label style={styles.label}>Hệ số phụ thu:</label><input type="number" step="0.1" style={styles.inputModal} value={form.HeSoPhuThu || ''} onChange={e => setForm({...form, HeSoPhuThu: e.target.value})}/></div>
+                    </div>
+                )}
+                {activeTab === 'phuthu' && (
+                    <div style={{marginTop: '20px'}}>
+                        <div style={styles.formGroup}><label style={styles.label}>Khách dư thứ:</label><input type="number" style={styles.inputModal} value={form.KhachThu} onChange={e => setForm({...form, KhachThu: e.target.value})}/></div>
+                        <div style={styles.formGroup}><label style={styles.label}>Tỉ lệ (VD: 0.25 = 25%):</label><input type="number" step="0.01" style={styles.inputModal} value={form.TiLePhuThu} onChange={e => setForm({...form, TiLePhuThu: e.target.value})}/></div>
+                    </div>
+                )}
+
+                {/* ĐÃ XÓA SELECT TRẠNG THÁI Ở ĐÂY */}
+
+                <div style={{textAlign: 'right', marginTop: 30, display: 'flex', justifyContent: 'flex-end', gap: '15px'}}>
+                    <button style={styles.btnCancel} onClick={() => setIsModalOpen(false)}>Hủy bỏ</button>
+                    <button style={styles.btnSaveModal} onClick={handleSave}>Lưu thông tin</button>
+                </div>
+            </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Styles
+const styles = {
+  wrapper: { width: "100%", maxWidth: "1400px", margin: "0 auto", padding: "2rem 2rem 3rem" },
+  headerRow: { marginBottom: "2rem" }, title: { fontSize: "2rem", fontWeight: 700, color: "#1F2A40", marginBottom: "0.5rem" }, subtitle: { color: "#6B7280", fontSize: "1rem" },
+  tabContainer: { display: 'flex', borderBottom: '2px solid #E5E7EB', marginBottom: '25px', gap: '5px' },
+  tab: { padding: '12px 24px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1rem', color: '#6B7280', fontWeight: '600', transition: '0.2s', borderBottom: '3px solid transparent' },
+  tabActive: { padding: '12px 24px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1rem', color: '#3A7DFF', fontWeight: 'bold', borderBottom: '3px solid #3A7DFF' },
+  card: { background: "white", borderRadius: "16px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06)", overflow: "hidden", border: "1px solid #e5e7eb" },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: "0.95rem" },
+  th: { padding: "16px 24px", backgroundColor: "#F9FAFB", borderBottom: "2px solid #E5E7EB", fontWeight: 600, color: "#374151", textAlign: "left", textTransform: "uppercase", fontSize: "0.85rem" },
+  td: { padding: "16px 24px", verticalAlign: "middle", color: "#1F2937", borderBottom: "1px solid #F3F4F6" },
+  btnAdd: { padding: "12px 24px", backgroundColor: "#3A7DFF", color: "white", borderRadius: "8px", border: "none", cursor: "pointer", fontWeight: 600, fontSize: "0.95rem", boxShadow: '0 4px 6px rgba(58, 125, 255, 0.3)' },
+  btnEdit: { background: "#3A7DFF", color: "white", padding: "6px 14px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "0.875rem", fontWeight: 500 },
+  btnDelete: { background: "#EF4444", color: "white", padding: "6px 14px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "0.875rem", fontWeight: 500 },
+  btnStop: { background: "#374151", color: "white", padding: "6px 14px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "0.875rem", fontWeight: 500 },
+  btnActivate: { background: "#059669", color: "white", padding: "6px 14px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "0.875rem", fontWeight: "bold" },
+  btnSave: { padding: "12px 30px", background: "#3A7DFF", color: "white", border: "none", borderRadius: "8px", fontSize: "1rem", fontWeight: "bold", cursor: "pointer" },
+  btnSaveModal: { padding: "10px 24px", background: "#3A7DFF", color: "white", border: "none", borderRadius: "8px", fontSize: "1rem", fontWeight: "bold", cursor: "pointer" },
+  btnCancel: { padding: "10px 24px", background: "#f3f4f6", color: "#374151", border: "1px solid #d1d5db", borderRadius: "8px", fontSize: "1rem", fontWeight: "600", cursor: "pointer" },
+  badgeActive: { display: "inline-block", padding: "4px 12px", borderRadius: "20px", fontWeight: 600, fontSize: "0.8rem", backgroundColor: "#D1FAE5", color: "#059669" },
+  badgeInactive: { display: "inline-block", padding: "4px 12px", borderRadius: "20px", fontWeight: 600, fontSize: "0.8rem", backgroundColor: "#F3F4F6", color: "#6B7280" },
+  formGroup: { marginBottom: '20px' }, label: { display: 'block', marginBottom: '8px', fontSize: '0.95rem', fontWeight: '600', color: '#374151' },
+  input: { width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '1rem', outline: 'none' },
+  inputLarge: { width: '100%', padding: '14px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '1.1rem', outline: 'none' },
+  inputModal: { width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #d1d5db', outline: 'none', boxSizing: 'border-box', fontSize: '1rem' },
+  overlay: { position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 999 },
+  modal: { width: "100%", maxWidth: "500px", background: "white", padding: "30px", borderRadius: "16px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" },
+};
+
+export default Settings;
 ```
 
 ### frontend\src\services\api.js

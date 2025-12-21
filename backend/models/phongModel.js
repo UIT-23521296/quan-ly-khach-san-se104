@@ -6,18 +6,12 @@ exports.getAll = () => {
         p.*, 
         lp.TenLoaiPhong, 
         lp.DonGia,
+        lp.DangSuDung AS TrangThaiLoaiPhong, 
         pt.NgayBatDauThue,
         pt.NgayDuKienTra,
-        (SELECT kh.HoTen 
-         FROM khachhang kh 
-         JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH 
-         WHERE ct.SoPhieu = pt.SoPhieu 
-         LIMIT 1) AS TenKhach,
-        (SELECT kh.SDT 
-         FROM khachhang kh 
-         JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH 
-         WHERE ct.SoPhieu = pt.SoPhieu 
-         LIMIT 1) AS SDTKhach
+        (SELECT COUNT(*) FROM phieuthue WHERE MaPhong = p.MaPhong) AS CoLichSu,
+        (SELECT kh.HoTen FROM khachhang kh JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH WHERE ct.SoPhieu = pt.SoPhieu LIMIT 1) AS TenKhach,
+        (SELECT kh.SDT FROM khachhang kh JOIN ct_phieuthue ct ON kh.MaKH = ct.MaKH WHERE ct.SoPhieu = pt.SoPhieu LIMIT 1) AS SDTKhach
     FROM PHONG p
     JOIN LOAIPHONG lp ON p.MaLoaiPhong = lp.MaLoaiPhong
     LEFT JOIN PHIEUTHUE pt ON p.MaPhong = pt.MaPhong AND pt.TrangThaiLuuTru = 'DANG_THUE'

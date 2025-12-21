@@ -4,15 +4,17 @@ const { v4: uuidv4 } = require("uuid");
 
 // --- HÀM LOGIC TÍNH TIỀN TRUNG TÂM ---
 const calculateBill = async (soPhieu) => {
-    // 1. Lấy thông tin phiếu, phòng, đơn giá
+    // 1. Lấy thông tin phiếu & Tham số quy định (Giữ nguyên)
     const sqlBase = `
         SELECT pt.SoPhieu, pt.MaPhong, pt.NgayBatDauThue, pt.NgayDuKienTra, 
                p.TenPhong, lp.DonGia, lp.TenLoaiPhong,
+               ts.SoKhachKhongTinhPhuThu, -- VD: 2
                (SELECT HoTen FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as TenKhachDaiDien,
                (SELECT DiaChi FROM khachhang WHERE MaKH = (SELECT MaKH FROM ct_phieuthue WHERE SoPhieu = pt.SoPhieu LIMIT 1)) as DiaChi
         FROM phieuthue pt
         JOIN phong p ON pt.MaPhong = p.MaPhong
         JOIN loaiphong lp ON p.MaLoaiPhong = lp.MaLoaiPhong
+        CROSS JOIN thamso ts 
         WHERE pt.SoPhieu = ?
     `;
     
@@ -20,7 +22,7 @@ const calculateBill = async (soPhieu) => {
     if (rows.length === 0) throw new Error("Phiếu thuê không tồn tại");
     const data = rows[0];
 
-    // 2. Lấy danh sách khách... 
+    // 2. Đếm số khách thực tế
     const sqlKhach = `
         SELECT lk.MaLoaiKhach, lk.HeSoPhuThu 
         FROM ct_phieuthue ct
@@ -31,44 +33,48 @@ const calculateBill = async (soPhieu) => {
     const [dsKhach] = await db.promise().query(sqlKhach, [soPhieu]);
     const soLuongKhach = dsKhach.length;
 
-    // 3. Xử lý logic tính số ngày
+    // 3. Tính số ngày
     const ngayBatDau = new Date(data.NgayBatDauThue);
-    
-    // Nếu data.NgayDuKienTra bị null (lỗi dữ liệu cũ) thì lấy ngày hiện tại
     const ngayKetThuc = data.NgayDuKienTra ? new Date(data.NgayDuKienTra) : new Date(); 
+    let soNgay = Math.ceil((Math.abs(ngayKetThuc - ngayBatDau)) / (1000 * 60 * 60 * 24));
+    if (soNgay <= 0) soNgay = 1;
 
-    // Tính số mili-giây chênh lệch
-    const diffTime = Math.abs(ngayKetThuc - ngayBatDau);
-    // Chuyển sang ngày (làm tròn lên)
-    let soNgay = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    // --- 4. Tính tiền ---
     
-    if (soNgay <= 0) soNgay = 1; // Ở chưa được 1 ngày thì tính là 1 ngày
-
-    // 4. LOGIC LINH HOẠT
-    
-    // A. Hệ Số Khách Nước Ngoài
+    // A. Hệ số khách nước ngoài
     let heSoKhach = 1.0;
     if (dsKhach.length > 0) {
         heSoKhach = Math.max(...dsKhach.map(k => k.HeSoPhuThu));
     }
 
-    // B. Phụ thu số lượng khách
+    // B. Phụ thu số lượng khách (TRA BẢNG TRỰC TIẾP)
     let tiLePhuThu = 0;
-    const [resTiLe] = await db.promise().query(
-        "SELECT TiLePhuThu FROM tilephuthu WHERE KhachThu = ?", 
-        [soLuongKhach]
-    );
+    const soKhachMienPhi = data.SoKhachKhongTinhPhuThu; // VD: 2
+    const soKhachDuRa = soLuongKhach - soKhachMienPhi;  // VD: 4 - 2 = 2 khách dư
 
-    if (resTiLe.length > 0) {
-        tiLePhuThu = resTiLe[0].TiLePhuThu;
-    } else {
-        const [maxTiLe] = await db.promise().query("SELECT TiLePhuThu FROM tilephuthu ORDER BY KhachThu DESC LIMIT 1");
-        if (maxTiLe.length > 0 && soLuongKhach > 2) {
-             tiLePhuThu = maxTiLe[0].TiLePhuThu; 
+    if (soKhachDuRa > 0) {
+        // Query trực tiếp: "Nếu dư X người thì tỉ lệ là bao nhiêu?"
+        const [resTiLe] = await db.promise().query(
+            "SELECT TiLePhuThu FROM tilephuthu WHERE KhachThu = ?", 
+            [soKhachDuRa]
+        );
+        
+        if (resTiLe.length > 0) {
+            // Trường hợp 1: Có trong bảng (VD: dư 1 hoặc 2 người)
+            tiLePhuThu = parseFloat(resTiLe[0].TiLePhuThu);
+        } else {
+            // Trường hợp 2: Số khách dư vượt quá bảng (VD: dư 5 người mà bảng chỉ có 2 dòng)
+            // Lấy dòng có KhachThu lớn nhất làm mốc (hoặc bạn có thể return lỗi)
+            const [maxRes] = await db.promise().query(
+                "SELECT TiLePhuThu FROM tilephuthu ORDER BY KhachThu DESC LIMIT 1"
+            );
+            if (maxRes.length > 0) {
+                tiLePhuThu = parseFloat(maxRes[0].TiLePhuThu);
+            }
         }
     }
 
-    // 5. TÍNH TỔNG TIỀN
+    // 5. Tính tổng tiền
     const donGia = parseFloat(data.DonGia);
     const thanhTien = (donGia * soNgay * (1 + tiLePhuThu)) * heSoKhach;
 
@@ -76,7 +82,7 @@ const calculateBill = async (soPhieu) => {
         ...data,
         SoNgay: soNgay,
         SoKhach: soLuongKhach,
-        TiLePhuThu: tiLePhuThu,
+        TiLePhuThu: tiLePhuThu, 
         HeSoKhach: heSoKhach,
         ThanhTien: Math.round(thanhTien)
     };

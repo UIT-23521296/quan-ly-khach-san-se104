@@ -67,7 +67,12 @@ const BookingManagement = () => {
         api.get("/thamso/sokhachMax"),
       ]);
       setBookings(bRes.data);
-      setRooms(rRes.data.filter((r) => r.TinhTrang === "Trống"));
+      setRooms(rRes.data.filter((r) => {
+          const isTrong = r.TinhTrang === "Trống";
+          const isLoaiActive = r.TrangThaiLoaiPhong === 1; 
+          
+          return isTrong && isLoaiActive;
+      }));
       setGuestTypes(gRes.data);
       setSoKhachToiDa(maxRes.data.soKhachToiDa);
     } catch (error) {

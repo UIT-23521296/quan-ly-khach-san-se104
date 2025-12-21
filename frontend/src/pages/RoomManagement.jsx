@@ -26,9 +26,8 @@ const RoomManagement = () => {
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   
-  // State tìm kiếm & Lọc
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterStatus, setFilterStatus] = useState("ALL"); // ✅ THÊM STATE LỌC TRẠNG THÁI
+  const [filterStatus, setFilterStatus] = useState("ALL");
 
   const isRented = form.tinhTrang === "Đã thuê";
 
@@ -172,14 +171,10 @@ const RoomManagement = () => {
       }
   }
 
-  // ✅ LOGIC LỌC KẾT HỢP (TỪ KHÓA + TRẠNG THÁI)
   const filteredRooms = rooms.filter((room) => {
-    // 1. Lọc theo trạng thái (Dropdown)
     if (filterStatus !== "ALL" && room.TinhTrang !== filterStatus) {
         return false;
     }
-
-    // 2. Lọc theo từ khóa (Input)
     if (!searchTerm) return true;
     const lowerTerm = searchTerm.toLowerCase();
     return (
@@ -202,7 +197,6 @@ const RoomManagement = () => {
         </div>
         
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            {/* ✅ THÊM DROPDOWN LỌC TRẠNG THÁI */}
             <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
@@ -215,7 +209,6 @@ const RoomManagement = () => {
                 <option value="Ngưng kinh doanh">Ngưng kinh doanh</option>
             </select>
 
-            {/* Ô tìm kiếm */}
             <div style={{position: 'relative'}}>
                 <input 
                     type="text" 
@@ -264,25 +257,41 @@ const RoomManagement = () => {
                     </td>
                 </tr>
             ) : filteredRooms.map((room) => {
-              const isStopped = room.TinhTrang === 'Ngưng kinh doanh';
-              const hasHistory = room.CoLichSu > 0; 
+              // Trạng thái Ngưng kinh doanh của chính phòng đó
+              const isRoomStopped = room.TinhTrang === 'Ngưng kinh doanh';
+              // ✅ Trạng thái Ngưng kinh doanh của LOẠI PHÒNG (Lấy từ backend)
+              const isTypeStopped = room.TrangThaiLoaiPhong === 0;
+              // Có lịch sử hay chưa
+              const hasHistory = (room.CoLichSu || 0) > 0; 
+
+              // Phòng bị coi là inactive nếu: Chính nó bị ngưng HOẶC Loại phòng của nó bị ngưng
+              const isInactive = isRoomStopped || isTypeStopped;
 
               return (
                 <tr 
                     key={room.MaPhong} 
                     style={{
                         ...styles.tr,
-                        backgroundColor: isStopped ? '#F3F4F6' : 'white',
-                        opacity: isStopped ? 0.6 : 1
+                        // Nền xám nếu inactive
+                        backgroundColor: isInactive ? '#F3F4F6' : 'white',
+                        opacity: isInactive ? 0.7 : 1
                     }}
                 >
                   <td style={styles.td}>{room.MaPhong}</td>
                   <td style={styles.td}>{room.TenPhong}</td>
 
                   <td style={styles.td}>
-                    <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
-                      {room.TenLoaiPhong || room.MaLoaiPhong}
-                    </span>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+                        <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
+                            {room.TenLoaiPhong || room.MaLoaiPhong}
+                        </span>
+                        {/* ✅ Badge cảnh báo nếu Loại phòng bị ngưng */}
+                        {isTypeStopped && (
+                            <span style={{fontSize: '10px', background: '#374151', color: 'white', padding: '2px 6px', borderRadius: '4px'}}>
+                                ⛔ Loại đã ngưng
+                            </span>
+                        )}
+                    </div>
                   </td>
 
                   <td style={styles.td}>
@@ -292,9 +301,14 @@ const RoomManagement = () => {
                   </td>
 
                   <td style={{ ...styles.td, textAlign: "center" }}>
-                    <span style={statusBadgeStyle(room.TinhTrang)}>
-                      {room.TinhTrang}
-                    </span>
+                    {/* ✅ Nếu Loại bị ngưng và phòng đang trống -> Hiện "Tạm ngưng" */}
+                    {isTypeStopped && room.TinhTrang === 'Trống' ? (
+                        <span style={styles.inactiveBadge}>⛔ Tạm ngưng</span>
+                    ) : (
+                        <span style={statusBadgeStyle(room.TinhTrang)}>
+                            {room.TinhTrang}
+                        </span>
+                    )}
                   </td>
 
                   <td style={styles.td}>{room.GhiChu}</td>
@@ -302,7 +316,8 @@ const RoomManagement = () => {
                   <td style={{ ...styles.td, textAlign: "center" }}>
                     <div style={styles.actionRow}>
                       
-                      {isStopped ? (
+                      {/* 1. Nếu chính phòng này bị Ngưng (do người dùng bấm nút Ngưng KD) */}
+                      {isRoomStopped ? (
                           <button 
                             style={styles.activateBtn}
                             onClick={() => handleBusinessStatus(room, 'active')}
@@ -310,7 +325,22 @@ const RoomManagement = () => {
                           >
                             🔄 Kích hoạt
                           </button>
+                      ) : isTypeStopped ? (
+                          /* 2. Nếu Loại phòng bị Ngưng -> Chỉ cho xem hoặc xóa (nếu ko có lịch sử), ko cho sửa/bảo trì */
+                          <>
+                             {hasHistory ? (
+                                 <span style={{fontSize: '12px', color: '#6b7280', fontStyle: 'italic'}}>Không khả dụng</span>
+                             ) : (
+                                <button
+                                  style={styles.deleteButton}
+                                  onClick={() => handleDelete(room.MaPhong)}
+                                >
+                                  Xoá
+                                </button>
+                             )}
+                          </>
                       ) : (
+                          /* 3. Bình thường: Hiện đủ nút */
                           <>
                             <button
                               style={styles.editButton}
@@ -357,7 +387,6 @@ const RoomManagement = () => {
         </table>
       </div>
 
-      {/* MODAL GIỮ NGUYÊN NHƯ CŨ */}
       {isModalOpen && (
         <div style={styles.modalOverlay} onClick={closeModal}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -491,7 +520,6 @@ const styles = {
     marginTop: "0.3rem",
     color: "#6B7280",
   },
-  // ✅ Style cho ô tìm kiếm và select
   searchInput: {
     padding: "0.6rem 1rem",
     borderRadius: "8px",
@@ -623,6 +651,11 @@ const styles = {
     cursor: "pointer",
     fontSize: "0.875rem",
     fontWeight: "bold",
+  },
+  // Badge xám cho trạng thái inactive
+  inactiveBadge: {
+      display: "inline-block", padding: "6px 12px", borderRadius: "20px", fontWeight: 600, fontSize: "0.85rem", 
+      backgroundColor: "#e5e7eb", color: "#6b7280", minWidth: "80px", textAlign: 'center', border: '1px solid #d1d5db'
   },
   modalOverlay: {
     position: "fixed",

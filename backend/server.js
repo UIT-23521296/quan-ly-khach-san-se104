@@ -33,6 +33,7 @@ app.use("/api/phieuthue", phieuthueRoutes);
 app.use("/api/loaikhach", loaikhachRoutes);
 app.use("/api/hoadon", hoadonRoutes);
 app.use("/api/baocao", baocaoRoutes);
+app.use("/api/quidinh", require("./routes/quidinhRoutes"));
 
 // Test API
 app.get("/api/test", (req, res) => {

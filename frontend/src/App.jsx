@@ -15,6 +15,7 @@ import BookingManagement from "./pages/BookingManagement";
 import InvoiceManagement from "./pages/InvoiceManagement";
 import RoomSearch from "./pages/RoomSearch";
 import ReportManagement from "./pages/ReportManagement";
+import Settings from "./pages/Settings";
 
 function PrivateLayout({ children }) {
   const token = localStorage.getItem("token");
@@ -63,7 +64,6 @@ function App() {
           }
         />
 
-        {/* Các trang còn lại bạn sẽ thêm sau */}
         <Route
           path="/phieuthue"
           element={
@@ -96,6 +96,15 @@ function App() {
           element={
             <PrivateLayout>
               <ReportManagement />
+            </PrivateLayout>
+          }
+        />
+
+        <Route
+          path="/settings"
+          element={
+            <PrivateLayout>
+              <Settings />
             </PrivateLayout>
           }
         />
