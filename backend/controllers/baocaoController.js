@@ -129,3 +129,37 @@ exports.getSavedReport = async (req, res) => {
         res.status(500).json({ message: "Lỗi lấy báo cáo đã lưu" });
     }
 };
+
+// --- API: XÓA BÁO CÁO ĐÃ LƯU ---
+exports.deleteReport = async (req, res) => {
+    const { thang, nam } = req.query; // Nhận qua Query String
+    if (!nam) return res.status(400).json({ message: "Thiếu thông tin năm" });
+
+    const conn = await db.promise().getConnection();
+    try {
+        const dbThang = (thang && thang !== 'ALL') ? thang : null;
+        
+        let sql = "DELETE FROM baocaodoanhthu WHERE Nam = ?";
+        let params = [nam];
+
+        if (dbThang) {
+            sql += " AND Thang = ?";
+            params.push(dbThang);
+        } else {
+            sql += " AND Thang IS NULL";
+        }
+
+        const [result] = await conn.query(sql, params);
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "Không tìm thấy báo cáo để xóa" });
+        }
+
+        res.json({ message: "Đã xóa báo cáo thành công!" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Lỗi khi xóa báo cáo" });
+    } finally {
+        conn.release();
+    }
+};

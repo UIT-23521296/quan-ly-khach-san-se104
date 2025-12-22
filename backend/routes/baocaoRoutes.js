@@ -11,4 +11,7 @@ router.post("/save", controller.saveReport);
 // Lấy các báo cáo đã lưu
 router.get("/saved", controller.getSavedReport);
 
+// Xóa báo cáo đã lưu
+router.delete("/delete", controller.deleteReport);
+
 module.exports = router;

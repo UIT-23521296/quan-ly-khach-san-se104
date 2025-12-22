@@ -10,6 +10,7 @@ const ReportManagement = () => {
   const [loading, setLoading] = useState(false);
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [isViewSaved, setIsViewSaved] = useState(false);
+  const [savedCreatedAt, setSavedCreatedAt] = useState(null);
 
   const handleCreateReport = async () => {
     setLoading(true);
@@ -21,10 +22,15 @@ const ReportManagement = () => {
 
       const res = await api.get(url);
       const data = res.data;
-
       const total = data.reduce((sum, item) => sum + Number(item.DoanhThu), 0);
+      
       setTotalRevenue(total);
       setReportData(data);
+      
+      // Reset trạng thái về chế độ xem Live
+      setIsViewSaved(false);
+      setSavedCreatedAt(null); 
+
     } catch (err) {
       alert("Lỗi lập báo cáo: " + err.message);
     } finally {
@@ -55,36 +61,69 @@ const ReportManagement = () => {
     }
   };
 
-  // --- XEM BÁO CÁO ĐÃ LƯU ---
-  const handleViewSaved = async () => {
-    setLoading(true);
-    try {
-        let url = `/baocao/saved?nam=${year}`;
-        if (reportType === 'month') {
-            url += `&thang=${month}`;
-        }
+  const handleDeleteReport = async () => {
+      const confirmMsg = `⚠️ CẢNH BÁO: Bạn có chắc muốn xóa vĩnh viễn báo cáo ${reportType === 'month' ? `Tháng ${month}` : 'Năm'} ${year}?\nHành động này không thể hoàn tác!`;
+      if (!window.confirm(confirmMsg)) return;
 
-        const res = await api.get(url);
-        const data = res.data;
+      setLoading(true);
+      try {
+          let url = `/baocao/delete?nam=${year}`;
+          if (reportType === 'month') url += `&thang=${month}`;
 
-        if (data.length === 0) {
-            alert(`⚠️ Chưa có báo cáo nào được lưu cho ${reportType === 'month' ? `tháng ${month}` : 'năm'} ${year}.`);
-            setReportData(null);
-            setTotalRevenue(0);
-        } else {
-            // Tính tổng doanh thu để hiển thị phần trăm
-            const total = data.reduce((sum, item) => sum + Number(item.DoanhThu), 0);
-            setTotalRevenue(total);
-            setReportData(data);
-            setIsViewSaved(true); // Đánh dấu là đang xem bản đã lưu
-            alert("✅ Đã tải dữ liệu từ báo cáo đã lưu.");
-        }
-    } catch (err) {
-        alert("❌ Lỗi: " + err.message);
-    } finally {
-        setLoading(false);
-    }
+          await api.delete(url);
+          
+          alert("✅ Đã xóa báo cáo!");
+          
+          // Sau khi xóa xong, reset về màn hình trắng hoặc tự động load lại bản tạm tính
+          setReportData(null);
+          setTotalRevenue(0);
+          setIsViewSaved(false); // Thoát chế độ xem đã lưu
+          setSavedCreatedAt(null);
+
+      } catch (err) {
+          alert("❌ Lỗi: " + (err.response?.data?.message || err.message));
+      } finally {
+          setLoading(false);
+      }
   };
+
+  // --- XEM BÁO CÁO ĐÃ LƯU ---
+  const handleViewSaved = async () => {
+    setLoading(true);
+    try {
+        let url = `/baocao/saved?nam=${year}`;
+        if (reportType === 'month') {
+            url += `&thang=${month}`;
+        }
+
+        const res = await api.get(url);
+        const data = res.data;
+
+        if (data.length === 0) {
+            alert(`⚠️ Chưa có báo cáo nào được lưu cho ${reportType === 'month' ? `tháng ${month}` : 'năm'} ${year}.`);
+            setReportData(null);
+            setTotalRevenue(0);
+            setSavedCreatedAt(null); // Reset nếu không có dữ liệu
+        } else {
+            const total = data.reduce((sum, item) => sum + Number(item.DoanhThu), 0);
+            setTotalRevenue(total);
+            setReportData(data);
+            setIsViewSaved(true);
+
+            // --- BỔ SUNG ĐOẠN NÀY ĐỂ LẤY NGÀY LƯU ---
+            if (data.length > 0) {
+                setSavedCreatedAt(data[0].NgayTao); 
+            }
+            // ----------------------------------------
+
+            alert("✅ Đã tải dữ liệu từ báo cáo đã lưu.");
+        }
+    } catch (err) {
+        alert("❌ Lỗi: " + err.message);
+    } finally {
+        setLoading(false);
+    }
+  };
 
   // ✅ HÀM TÍNH TOÁN DÒNG CHỮ NGÀY THÁNG (MỚI)
   const renderTimeText = () => {
@@ -241,6 +280,13 @@ const ReportManagement = () => {
                             💾 Lưu Báo Cáo
                         </button>
                     )}
+
+                    {/* 2. Nếu đang xem Saved -> Hiện nút Xóa */}
+                    {isViewSaved && (
+                        <button style={styles.deleteBtn} onClick={handleDeleteReport} disabled={loading}>
+                            🗑️ Xóa Báo Cáo
+                        </button>
+                    )}
                     
                     <button style={styles.printBtn} onClick={handlePrint}>🖨️ In Báo Cáo</button>
                 </div>
@@ -344,6 +390,19 @@ const styles = {
       fontWeight: "600", 
       cursor: "pointer", 
       height: "42px",
+      display: 'flex',
+      alignItems: 'center',
+      gap: '5px'
+  },
+  deleteBtn: {
+      padding: "8px 16px",
+      background: "#fee2e2", // Đỏ nhạt
+      color: "#dc2626",      // Chữ đỏ đậm
+      border: "1px solid #fecaca",
+      borderRadius: "6px",
+      fontSize: "14px",
+      fontWeight: "600",
+      cursor: "pointer",
       display: 'flex',
       alignItems: 'center',
       gap: '5px'
