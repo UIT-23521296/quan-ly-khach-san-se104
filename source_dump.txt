@@ -431,6 +431,38 @@ exports.getHoaDonDetail = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+// API 5: Xóa hóa đơn (Xóa chi tiết trước -> Xóa hóa đơn sau)
+exports.deleteHoaDon = async (req, res) => {
+    const { soHoaDon } = req.params;
+    const conn = await db.promise().getConnection();
+
+    try {
+        await conn.beginTransaction();
+
+        // 1. Xóa Chi Tiết Hóa Đơn trước (Do ràng buộc khóa ngoại)
+        await conn.query("DELETE FROM ct_hoadon WHERE SoHoaDon = ?", [soHoaDon]);
+
+        // 2. Xóa Hóa Đơn
+        const [result] = await conn.query("DELETE FROM hoadon WHERE SoHoaDon = ?", [soHoaDon]);
+
+        if (result.affectedRows === 0) {
+            // Nếu không xóa được dòng nào (ID không tồn tại)
+            await conn.rollback();
+            return res.status(404).json({ message: "Hóa đơn không tồn tại" });
+        }
+
+        await conn.commit();
+        res.json({ message: "Xóa hóa đơn thành công!" });
+
+    } catch (err) {
+        await conn.rollback();
+        console.error("Lỗi xóa hóa đơn:", err);
+        res.status(500).json({ message: "Lỗi server: " + err.message });
+    } finally {
+        conn.release();
+    }
+};
 ```
 
 ### backend\controllers\loaikhachController.js
@@ -607,6 +639,42 @@ exports.huyPhieu = async (req, res) => {
   }
 };
 
+// 5️⃣ XÓA PHIẾU THUÊ
+exports.deletePhieu = async (req, res) => {
+    const { id } = req.params; // id là SoPhieu
+    const conn = await db.promise().getConnection(); // Lấy connection để dùng transaction
+
+    try {
+        await conn.beginTransaction();
+
+        // 1. Xóa chi tiết phiếu thuê trước (Bảng con ct_phieuthue)
+        await conn.query("DELETE FROM ct_phieuthue WHERE SoPhieu = ?", [id]);
+
+        // 2. Xóa phiếu thuê (Bảng cha phieuthue)
+        // Nếu phiếu này đã có Hóa đơn, dòng lệnh này xẽ gây ra lỗi Constraint và nhảy xuống catch
+        await conn.query("DELETE FROM phieuthue WHERE SoPhieu = ?", [id]);
+
+        await conn.commit();
+        res.json({ message: "Xóa phiếu thuê thành công!" });
+
+    } catch (err) {
+        await conn.rollback(); // Hoàn tác nếu có lỗi
+
+        // Mã lỗi 1451: Cannot delete or update a parent row: a foreign key constraint fails
+        if (err.errno === 1451) {
+            return res.status(400).json({ 
+                message: "Không thể xóa: Phiếu thuê này ĐÃ CÓ HÓA ĐƠN. Vui lòng xóa hóa đơn trước nếu muốn xóa phiếu." 
+            });
+        }
+
+        console.error(err);
+        res.status(500).json({ message: "Lỗi server: " + err.message });
+    } finally {
+        conn.release(); // Trả lại connection
+    }
+};
+
+
 exports.getAllPhieuThue = async (req, res) => {
   try {
     const [rows] = await phieuThueModel.getAll();
@@ -615,6 +683,7 @@ exports.getAllPhieuThue = async (req, res) => {
     res.status(500).json({ message: "Lỗi server" });
   }
 };
+
 ```
 
 ### backend\controllers\phongController.js
@@ -706,6 +775,18 @@ exports.toggleBusinessStatus = async (req, res) => {
   const { action } = req.body; // 'stop' hoặc 'active'
 
   try {
+    // --- BƯỚC 1: KIỂM TRA TRẠNG THÁI HIỆN TẠI ---
+    const [check] = await db.promise().query("SELECT TinhTrang FROM phong WHERE MaPhong = ?", [id]);
+    if (check.length === 0) return res.status(404).json({ message: "Phòng không tồn tại" });
+    
+    const currentStatus = check[0].TinhTrang;
+
+    // Nếu muốn Ngưng kinh doanh mà phòng đang có khách -> CHẶN
+    if (action === 'stop' && currentStatus === 'Đã thuê') {
+        return res.status(400).json({ message: "Không thể ngưng kinh doanh: Phòng đang có khách thuê!" });
+    }
+    // -------------------------------------------------------
+
     const newStatus = action === 'stop' ? 'Ngưng kinh doanh' : 'Trống';
     await phongModel.updateStatus(newStatus, id);
     res.json({ message: "Cập nhật trạng thái kinh doanh thành công" });
@@ -714,14 +795,24 @@ exports.toggleBusinessStatus = async (req, res) => {
   }
 };
 
-// ✅ THÊM MỚI
+// Xóa phòng
 exports.deleteRoom = async (req, res) => {
   const { id } = req.params;
-
   try {
+    // --- BƯỚC 1: KIỂM TRA TRẠNG THÁI  ---
+    const [check] = await db.promise().query("SELECT TinhTrang FROM phong WHERE MaPhong = ?", [id]);
+    if (check.length > 0 && check[0].TinhTrang === 'Đã thuê') {
+        return res.status(400).json({ message: "Không thể xóa: Phòng đang có khách thuê!" });
+    }
+    // ------------------------------------------------
+
     await phongModel.delete(id);
     res.json({ message: "Xóa phòng thành công" });
   } catch (err) {
+    // Check lỗi khóa ngoại (nếu phòng đã có lịch sử cũ)
+    if (err.errno === 1451) {
+         return res.status(400).json({ message: "Không thể xóa phòng đã có lịch sử thuê. Hãy chọn 'Ngưng kinh doanh'." });
+    }
     res.status(500).json({ error: err.message });
   }
 };
@@ -1280,6 +1371,9 @@ router.get("/:soHoaDon", controller.getHoaDonDetail);
 // Tạo và thanh toán hóa đơn
 router.post("/pay", controller.createAndPay);
 
+// Xóa hóa đơn
+router.delete("/:soHoaDon", controller.deleteHoaDon);
+
 module.exports = router;
 ```
 
@@ -1341,6 +1435,9 @@ router.put("/:soPhieu/checkout", controller.checkOut);
 
 // Hủy phiếu
 router.put("/:soPhieu/huy", controller.huyPhieu);
+
+// Xóa phiếu
+router.delete("/:id", controller.deletePhieu);
 
 module.exports = router;
 ```
@@ -2041,6 +2138,27 @@ const BookingManagement = () => {
     setKhachList(newList);
   };
 
+
+  const handleDelete = async (soPhieu) => {
+      if (!window.confirm(`⚠️ CẢNH BÁO: Bạn có chắc muốn xóa phiếu thuê ${soPhieu}?\nDữ liệu khách hàng trong phiếu này cũng sẽ bị xóa.`)) {
+          return;
+      }
+
+      try {
+          setLoading(true);
+          await api.delete(`/phieuthue/${soPhieu}`); // Gọi API vừa viết ở trên
+          
+          alert("✅ Xóa phiếu thuê thành công!");
+          fetchData(); // Tải lại danh sách
+      } catch (error) {
+          // Backend trả về lỗi 400 kèm message nếu có hóa đơn
+          const msg = error.response?.data?.message || "Lỗi khi xóa phiếu.";
+          alert("❌ " + msg);
+      } finally {
+          setLoading(false);
+      }
+  };
+
   const addKhach = () => {
     if (khachList.length >= soKhachToiDa) return;
     setKhachList([...khachList, { ...emptyKhach }]);
@@ -2306,6 +2424,30 @@ const BookingManagement = () => {
                             Hủy
                             </button>
                         )}
+                        
+                        {!isDangThue && (
+                            <button
+                            style={{ 
+                                ...styles.actionBtn, 
+                                borderColor: '#ef4444', 
+                                color: '#ef4444',
+                                background: '#fee2e2'
+                            }}
+                            onClick={() => handleDelete(b.SoPhieu)}
+                            title="Xóa phiếu thuê"
+                            onMouseOver={(e) => {
+                                    e.currentTarget.style.background = '#fee2e2';
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                }}
+                                onMouseOut={(e) => {
+                                    e.currentTarget.style.background = '#fee2e2';
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                            >
+                                🗑️ Xóa
+                            </button>
+                        )}
+                        
                       </div>
                     </td>
                   </tr>
@@ -3120,6 +3262,25 @@ const InvoiceManagement = () => {
       }
   };
 
+  // Hàm xử lý xóa hóa đơn
+  const handleDelete = async (soHoaDon) => {
+    if (!window.confirm(`⚠️ CẢNH BÁO: Bạn có chắc muốn xóa vĩnh viễn hóa đơn ${soHoaDon}?\nHành động này không thể hoàn tác!`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await api.delete(`/hoadon/${soHoaDon}`); // Gọi API vừa tạo
+      alert("✅ Đã xóa hóa đơn thành công!");
+      fetchInvoices(); // Tải lại danh sách
+    } catch (err) {
+      console.error(err);
+      alert("❌ Lỗi: " + (err.response?.data?.message || "Không thể xóa hóa đơn"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ✅ HÀM XỬ LÝ IN HÓA ĐƠN
   const handlePrint = () => {
     const printContent = document.getElementById("invoice-print-section");
@@ -3235,6 +3396,22 @@ const InvoiceManagement = () => {
                                 }}
                             >
                                 👁️ Xem
+                            </button>
+
+                            <button     
+                                style={styles.deleteBtn} 
+                                onClick={() => handleDelete(inv.SoHoaDon)}
+                                title="Xóa hóa đơn"
+                                onMouseOver={(e) => {
+                                    e.currentTarget.style.background = '#fee2e2';
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                }}
+                                onMouseOut={(e) => {
+                                    e.currentTarget.style.background = '#fee2e2';
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                            >
+                                🗑️ Xóa
                             </button>
                         </td>
                     </tr>
@@ -3369,7 +3546,7 @@ const styles = {
       display: 'inline-flex',
       alignItems: 'center',
       gap: '6px',
-      padding: '8px 16px',
+      padding: '8px 12px',
       background: '#e0f2fe', 
       color: '#0284c7', 
       border: '1px solid #bae6fd', 
@@ -3379,6 +3556,23 @@ const styles = {
       fontWeight: '700',
       transition: 'all 0.2s ease',
       boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+  },
+
+  deleteBtn: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '6px',
+      padding: '8px 12px',
+      background: '#fee2e2',  // Màu đỏ nhạt
+      color: '#ef4444',       // Chữ đỏ đậm
+      border: '1px solid #fecaca', 
+      borderRadius: '8px', 
+      cursor: 'pointer',
+      fontSize: '13px',
+      fontWeight: '700',
+      transition: 'all 0.2s ease',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+      marginLeft: '10px',
   },
   
   // Style cho nút IN
@@ -4064,6 +4258,9 @@ const RoomManagement = () => {
               // Có lịch sử hay chưa
               const hasHistory = (room.CoLichSu || 0) > 0; 
 
+              // Phòng có đang thuê hay không
+              const isOccupied = room.TinhTrang === 'Đã thuê';
+
               // Phòng bị coi là inactive nếu: Chính nó bị ngưng HOẶC Loại phòng của nó bị ngưng
               const isInactive = isRoomStopped || isTypeStopped;
 
@@ -4159,22 +4356,29 @@ const RoomManagement = () => {
                                 </button>
                             )}
 
-                            {hasHistory ? (
-                                <button 
-                                    style={styles.stopBtn} 
-                                    onClick={() => handleBusinessStatus(room, 'stop')}
-                                    title="Phòng đã có dữ liệu, chỉ có thể ngưng kinh doanh"
-                                >
-                                    ⛔ Ngưng KD
-                                </button>
+                            {/* 3. Nút Ngưng KD / Xóa: Ẩn hoặc Disable nếu đang thuê */}
+                            {isOccupied ? (
+                                // Nếu đang thuê -> Hiển thị thông báo hoặc nút mờ
+                                <span style={{fontSize: '11px', color: '#dc2626', fontWeight: 'bold', padding: '6px'}}>⛔ Đang thuê</span>
                             ) : (
-                                <button
-                                  style={styles.deleteButton}
-                                  onClick={() => handleDelete(room.MaPhong)}
-                                  title="Phòng chưa có dữ liệu, có thể xóa vĩnh viễn"
-                                >
-                                  Xoá
-                                </button>
+                                // Nếu KHÔNG thuê -> Hiện nút bình thường
+                                hasHistory ? (
+                                    <button 
+                                        style={styles.stopBtn} 
+                                        onClick={() => handleBusinessStatus(room, 'stop')}
+                                        title="Phòng đã có dữ liệu, chỉ có thể ngưng kinh doanh"
+                                    >
+                                        ⛔ Ngưng KD
+                                    </button>
+                                ) : (
+                                    <button
+                                      style={styles.deleteButton}
+                                      onClick={() => handleDelete(room.MaPhong)}
+                                      title="Phòng chưa có dữ liệu, có thể xóa vĩnh viễn"
+                                    >
+                                      Xoá
+                                    </button>
+                                )
                             )}
                           </>
                       )}

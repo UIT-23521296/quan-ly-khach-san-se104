@@ -34,6 +34,25 @@ const InvoiceManagement = () => {
       }
   };
 
+  // Hàm xử lý xóa hóa đơn
+  const handleDelete = async (soHoaDon) => {
+    if (!window.confirm(`⚠️ CẢNH BÁO: Bạn có chắc muốn xóa vĩnh viễn hóa đơn ${soHoaDon}?\nHành động này không thể hoàn tác!`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await api.delete(`/hoadon/${soHoaDon}`); // Gọi API vừa tạo
+      alert("✅ Đã xóa hóa đơn thành công!");
+      fetchInvoices(); // Tải lại danh sách
+    } catch (err) {
+      console.error(err);
+      alert("❌ Lỗi: " + (err.response?.data?.message || "Không thể xóa hóa đơn"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ✅ HÀM XỬ LÝ IN HÓA ĐƠN
   const handlePrint = () => {
     const printContent = document.getElementById("invoice-print-section");
@@ -149,6 +168,22 @@ const InvoiceManagement = () => {
                                 }}
                             >
                                 👁️ Xem
+                            </button>
+
+                            <button     
+                                style={styles.deleteBtn} 
+                                onClick={() => handleDelete(inv.SoHoaDon)}
+                                title="Xóa hóa đơn"
+                                onMouseOver={(e) => {
+                                    e.currentTarget.style.background = '#fee2e2';
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                }}
+                                onMouseOut={(e) => {
+                                    e.currentTarget.style.background = '#fee2e2';
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                            >
+                                🗑️ Xóa
                             </button>
                         </td>
                     </tr>
@@ -283,7 +318,7 @@ const styles = {
       display: 'inline-flex',
       alignItems: 'center',
       gap: '6px',
-      padding: '8px 16px',
+      padding: '8px 12px',
       background: '#e0f2fe', 
       color: '#0284c7', 
       border: '1px solid #bae6fd', 
@@ -293,6 +328,23 @@ const styles = {
       fontWeight: '700',
       transition: 'all 0.2s ease',
       boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+  },
+
+  deleteBtn: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '6px',
+      padding: '8px 12px',
+      background: '#fee2e2',  // Màu đỏ nhạt
+      color: '#ef4444',       // Chữ đỏ đậm
+      border: '1px solid #fecaca', 
+      borderRadius: '8px', 
+      cursor: 'pointer',
+      fontSize: '13px',
+      fontWeight: '700',
+      transition: 'all 0.2s ease',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+      marginLeft: '10px',
   },
   
   // Style cho nút IN

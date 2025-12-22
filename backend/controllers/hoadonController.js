@@ -182,3 +182,35 @@ exports.getHoaDonDetail = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+// API 5: Xóa hóa đơn (Xóa chi tiết trước -> Xóa hóa đơn sau)
+exports.deleteHoaDon = async (req, res) => {
+    const { soHoaDon } = req.params;
+    const conn = await db.promise().getConnection();
+
+    try {
+        await conn.beginTransaction();
+
+        // 1. Xóa Chi Tiết Hóa Đơn trước (Do ràng buộc khóa ngoại)
+        await conn.query("DELETE FROM ct_hoadon WHERE SoHoaDon = ?", [soHoaDon]);
+
+        // 2. Xóa Hóa Đơn
+        const [result] = await conn.query("DELETE FROM hoadon WHERE SoHoaDon = ?", [soHoaDon]);
+
+        if (result.affectedRows === 0) {
+            // Nếu không xóa được dòng nào (ID không tồn tại)
+            await conn.rollback();
+            return res.status(404).json({ message: "Hóa đơn không tồn tại" });
+        }
+
+        await conn.commit();
+        res.json({ message: "Xóa hóa đơn thành công!" });
+
+    } catch (err) {
+        await conn.rollback();
+        console.error("Lỗi xóa hóa đơn:", err);
+        res.status(500).json({ message: "Lỗi server: " + err.message });
+    } finally {
+        conn.release();
+    }
+};

@@ -85,6 +85,18 @@ exports.toggleBusinessStatus = async (req, res) => {
   const { action } = req.body; // 'stop' hoặc 'active'
 
   try {
+    // --- BƯỚC 1: KIỂM TRA TRẠNG THÁI HIỆN TẠI ---
+    const [check] = await db.promise().query("SELECT TinhTrang FROM phong WHERE MaPhong = ?", [id]);
+    if (check.length === 0) return res.status(404).json({ message: "Phòng không tồn tại" });
+    
+    const currentStatus = check[0].TinhTrang;
+
+    // Nếu muốn Ngưng kinh doanh mà phòng đang có khách -> CHẶN
+    if (action === 'stop' && currentStatus === 'Đã thuê') {
+        return res.status(400).json({ message: "Không thể ngưng kinh doanh: Phòng đang có khách thuê!" });
+    }
+    // -------------------------------------------------------
+
     const newStatus = action === 'stop' ? 'Ngưng kinh doanh' : 'Trống';
     await phongModel.updateStatus(newStatus, id);
     res.json({ message: "Cập nhật trạng thái kinh doanh thành công" });
@@ -93,14 +105,24 @@ exports.toggleBusinessStatus = async (req, res) => {
   }
 };
 
-// ✅ THÊM MỚI
+// Xóa phòng
 exports.deleteRoom = async (req, res) => {
   const { id } = req.params;
-
   try {
+    // --- BƯỚC 1: KIỂM TRA TRẠNG THÁI  ---
+    const [check] = await db.promise().query("SELECT TinhTrang FROM phong WHERE MaPhong = ?", [id]);
+    if (check.length > 0 && check[0].TinhTrang === 'Đã thuê') {
+        return res.status(400).json({ message: "Không thể xóa: Phòng đang có khách thuê!" });
+    }
+    // ------------------------------------------------
+
     await phongModel.delete(id);
     res.json({ message: "Xóa phòng thành công" });
   } catch (err) {
+    // Check lỗi khóa ngoại (nếu phòng đã có lịch sử cũ)
+    if (err.errno === 1451) {
+         return res.status(400).json({ message: "Không thể xóa phòng đã có lịch sử thuê. Hãy chọn 'Ngưng kinh doanh'." });
+    }
     res.status(500).json({ error: err.message });
   }
 };

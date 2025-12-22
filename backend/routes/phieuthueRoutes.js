@@ -19,4 +19,7 @@ router.put("/:soPhieu/checkout", controller.checkOut);
 // Hủy phiếu
 router.put("/:soPhieu/huy", controller.huyPhieu);
 
+// Xóa phiếu
+router.delete("/:id", controller.deletePhieu);
+
 module.exports = router;

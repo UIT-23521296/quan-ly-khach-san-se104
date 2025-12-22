@@ -16,4 +16,7 @@ router.get("/:soHoaDon", controller.getHoaDonDetail);
 // Tạo và thanh toán hóa đơn
 router.post("/pay", controller.createAndPay);
 
+// Xóa hóa đơn
+router.delete("/:soHoaDon", controller.deleteHoaDon);
+
 module.exports = router;

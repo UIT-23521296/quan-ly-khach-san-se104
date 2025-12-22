@@ -3,13 +3,8 @@ const db = require("../config/db");
 // --- 1. LOẠI PHÒNG ---
 exports.getLoaiPhong = async (req, res) => {
     try {
-        const sql = `
-            SELECT lp.*, 
-            (SELECT COUNT(*) FROM phong WHERE MaLoaiPhong = lp.MaLoaiPhong) as CoDuLieu 
-            FROM loaiphong lp 
-            ORDER BY lp.MaLoaiPhong
-        `;
-        const [rows] = await db.promise().query(sql);
+        // Không cần lấy cột CoDuLieu để ẩn hiện nút nữa, vì nút Xóa luôn hiện
+        const [rows] = await db.promise().query("SELECT * FROM loaiphong ORDER BY MaLoaiPhong");
         res.json(rows);
     } catch (err) { res.status(500).json({ message: err.message }); }
 };
@@ -17,7 +12,8 @@ exports.getLoaiPhong = async (req, res) => {
 exports.createLoaiPhong = async (req, res) => {
     try {
         const { maLoai, tenLoai, donGia } = req.body;
-        await db.promise().query("INSERT INTO loaiphong (MaLoaiPhong, TenLoaiPhong, DonGia) VALUES (?, ?, ?)", [maLoai, tenLoai, donGia]);
+        // Mặc định DangSuDung = 1 (nếu DB yêu cầu)
+        await db.promise().query("INSERT INTO loaiphong (MaLoaiPhong, TenLoaiPhong, DonGia, DangSuDung) VALUES (?, ?, ?, 1)", [maLoai, tenLoai, donGia]);
         res.json({ message: "Thêm thành công" });
     } catch (err) { res.status(500).json({ message: "Lỗi: Mã loại phòng có thể đã tồn tại" }); }
 };
@@ -25,10 +21,11 @@ exports.createLoaiPhong = async (req, res) => {
 exports.updateLoaiPhong = async (req, res) => {
     try {
         const { id } = req.params;
-        const { tenLoai, donGia, dangSuDung } = req.body;
+        const { tenLoai, donGia } = req.body;
+        // Chỉ cập nhật Tên và Đơn giá
         await db.promise().query(
-            "UPDATE loaiphong SET TenLoaiPhong = ?, DonGia = ?, DangSuDung = ? WHERE MaLoaiPhong = ?", 
-            [tenLoai, donGia, dangSuDung, id]
+            "UPDATE loaiphong SET TenLoaiPhong = ?, DonGia = ? WHERE MaLoaiPhong = ?", 
+            [tenLoai, donGia, id]
         );
         res.json({ message: "Cập nhật thành công" });
     } catch (err) { res.status(500).json({ message: err.message }); }
@@ -37,16 +34,16 @@ exports.updateLoaiPhong = async (req, res) => {
 exports.deleteLoaiPhong = async (req, res) => {
     try {
         const { id } = req.params;
-        // Kiểm tra xem đã có phòng nào thuộc loại này chưa
+        // 1. Kiểm tra ràng buộc khóa ngoại (Bảng Phong)
         const [check] = await db.promise().query("SELECT COUNT(*) as count FROM phong WHERE MaLoaiPhong = ?", [id]);
         
         if (check[0].count > 0) {
             return res.status(400).json({ 
-                error: "DATA_EXIST", 
-                message: "Không thể xóa vì đã có phòng thuộc loại này. Hãy chuyển sang 'Ngưng hoạt động'." 
+                message: `Không thể xóa: Đang có ${check[0].count} phòng thuộc loại này. Vui lòng xóa các phòng đó trước.` 
             });
         }
 
+        // 2. Nếu không có ràng buộc -> Xóa
         await db.promise().query("DELETE FROM loaiphong WHERE MaLoaiPhong = ?", [id]);
         res.json({ message: "Xóa thành công" });
     } catch (err) { res.status(500).json({ message: err.message }); }
@@ -55,13 +52,7 @@ exports.deleteLoaiPhong = async (req, res) => {
 // --- 2. LOẠI KHÁCH ---
 exports.getLoaiKhach = async (req, res) => {
     try {
-        const sql = `
-            SELECT lk.*, 
-            (SELECT COUNT(*) FROM khachhang WHERE MaLoaiKhach = lk.MaLoaiKhach) as CoDuLieu 
-            FROM loaikhach lk 
-            ORDER BY lk.MaLoaiKhach
-        `;
-        const [rows] = await db.promise().query(sql);
+        const [rows] = await db.promise().query("SELECT * FROM loaikhach ORDER BY MaLoaiKhach");
         res.json(rows);
     } catch (err) { res.status(500).json({ message: err.message }); }
 };
@@ -69,60 +60,46 @@ exports.getLoaiKhach = async (req, res) => {
 exports.createLoaiKhach = async (req, res) => {
     try {
         const { maLoai, tenLoai, heSo } = req.body;
-        // Mặc định DangSuDung = 1 khi tạo mới
         await db.promise().query(
             "INSERT INTO loaikhach (MaLoaiKhach, TenLoaiKhach, HeSoPhuThu, DangSuDung) VALUES (?, ?, ?, 1)", 
             [maLoai, tenLoai, heSo]
         );
-        res.json({ message: "Thêm loại khách thành công" });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Lỗi: Mã loại khách có thể đã tồn tại" }); 
-    }
+        res.json({ message: "Thêm thành công" });
+    } catch (err) { res.status(500).json({ message: "Lỗi: Mã loại khách có thể đã tồn tại" }); }
 };
 
 exports.updateLoaiKhach = async (req, res) => {
     try {
         const { id } = req.params;
-        const { tenLoai, heSo, dangSuDung } = req.body;
+        const { tenLoai, heSo } = req.body;
         await db.promise().query(
-            "UPDATE loaikhach SET TenLoaiKhach = ?, HeSoPhuThu = ?, DangSuDung = ? WHERE MaLoaiKhach = ?", 
-            [tenLoai, heSo, dangSuDung, id]
+            "UPDATE loaikhach SET TenLoaiKhach = ?, HeSoPhuThu = ? WHERE MaLoaiKhach = ?", 
+            [tenLoai, heSo, id]
         );
         res.json({ message: "Cập nhật thành công" });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: err.message }); 
-    }
+    } catch (err) { res.status(500).json({ message: err.message }); }
 };
 
 exports.deleteLoaiKhach = async (req, res) => {
     try {
         const { id } = req.params;
-        // Kiểm tra ràng buộc dữ liệu trước khi xóa
+        // 1. Kiểm tra ràng buộc (Bảng KhachHang)
         const [check] = await db.promise().query("SELECT COUNT(*) as count FROM khachhang WHERE MaLoaiKhach = ?", [id]);
         
         if (check[0].count > 0) {
             return res.status(400).json({ 
-                error: "DATA_EXIST", 
-                message: "Không thể xóa vì đã có khách hàng thuộc loại này." 
+                message: `Không thể xóa: Đang có ${check[0].count} khách hàng thuộc loại này trong lịch sử.` 
             });
         }
 
         await db.promise().query("DELETE FROM loaikhach WHERE MaLoaiKhach = ?", [id]);
         res.json({ message: "Xóa thành công" });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: err.message }); 
-    }
+    } catch (err) { res.status(500).json({ message: err.message }); }
 };
 
 // --- 3. PHỤ THU ---
 exports.getPhuThu = async (req, res) => {
     try {
-        // Phụ thu thì không có bảng liên kết trực tiếp (vì lưu giá trị vào hóa đơn), 
-        // nên ta giả định CoDuLieu = 0 để luôn cho phép xóa nếu muốn, 
-        // hoặc bạn có thể chỉ dùng tính năng Ngưng áp dụng.
         const [rows] = await db.promise().query("SELECT * FROM tilephuthu ORDER BY KhachThu");
         res.json(rows);
     } catch (err) { res.status(500).json({ message: err.message }); }
@@ -130,11 +107,11 @@ exports.getPhuThu = async (req, res) => {
 
 exports.updatePhuThu = async (req, res) => {
     try {
-        const { khachThu, tiLe, dangSuDung } = req.body; // Thêm dangSuDung
-        // Upsert cập nhật cả trạng thái
-        const sql = `INSERT INTO tilephuthu (KhachThu, TiLePhuThu, DangSuDung) VALUES (?, ?, ?) 
-                     ON DUPLICATE KEY UPDATE TiLePhuThu = ?, DangSuDung = ?`;
-        await db.promise().query(sql, [khachThu, tiLe, dangSuDung, tiLe, dangSuDung]);
+        const { khachThu, tiLe } = req.body;
+        // Dùng ON DUPLICATE KEY UPDATE để vừa Thêm vừa Sửa
+        const sql = `INSERT INTO tilephuthu (KhachThu, TiLePhuThu, DangSuDung) VALUES (?, ?, 1) 
+                     ON DUPLICATE KEY UPDATE TiLePhuThu = ?`;
+        await db.promise().query(sql, [khachThu, tiLe, tiLe]);
         res.json({ message: "Lưu thành công" });
     } catch (err) { res.status(500).json({ message: err.message }); }
 };
@@ -142,20 +119,21 @@ exports.updatePhuThu = async (req, res) => {
 exports.deletePhuThu = async (req, res) => {
     try {
         const { id } = req.params;
+        // Phụ thu thường ít ràng buộc cứng (vì giá trị copy vào hóa đơn), nhưng nếu muốn chắc chắn thì xóa thẳng.
         await db.promise().query("DELETE FROM tilephuthu WHERE KhachThu = ?", [id]);
         res.json({ message: "Xóa thành công" });
     } catch (err) { res.status(500).json({ message: err.message }); }
 };
 
-// --- 4. THAM SỐ ---
+// --- 4. THAM SỐ (GIỮ NGUYÊN) ---
 exports.getThamSo = async (req, res) => {
-    try { const [rows] = await db.promise().query("SELECT * FROM thamso LIMIT 1"); res.json(rows[0]); } catch (err) { res.status(500).json({ message: err.message }); }
+    try { const [rows] = await db.promise().query("SELECT * FROM thamso LIMIT 1"); res.json(rows[0]); } 
+    catch (err) { res.status(500).json({ message: err.message }); }
 };
-
 exports.updateThamSo = async (req, res) => {
     try {
-        const { soKhachToiDa, soKhachKhongTinhPhuThu } = req.body;
-        await db.promise().query("UPDATE thamso SET SoKhachToiDa = ?, SoKhachKhongTinhPhuThu = ?", [soKhachToiDa, soKhachKhongTinhPhuThu]);
+        const { SoKhachToiDa, SoKhachKhongTinhPhuThu } = req.body;
+        await db.promise().query("UPDATE thamso SET SoKhachToiDa = ?, SoKhachKhongTinhPhuThu = ?", [SoKhachToiDa, SoKhachKhongTinhPhuThu]);
         res.json({ message: "Cập nhật tham số thành công" });
     } catch (err) { res.status(500).json({ message: err.message }); }
 };

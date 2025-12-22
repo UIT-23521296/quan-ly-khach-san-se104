@@ -154,6 +154,42 @@ exports.huyPhieu = async (req, res) => {
   }
 };
 
+// 5️⃣ XÓA PHIẾU THUÊ
+exports.deletePhieu = async (req, res) => {
+    const { id } = req.params; // id là SoPhieu
+    const conn = await db.promise().getConnection(); // Lấy connection để dùng transaction
+
+    try {
+        await conn.beginTransaction();
+
+        // 1. Xóa chi tiết phiếu thuê trước (Bảng con ct_phieuthue)
+        await conn.query("DELETE FROM ct_phieuthue WHERE SoPhieu = ?", [id]);
+
+        // 2. Xóa phiếu thuê (Bảng cha phieuthue)
+        // Nếu phiếu này đã có Hóa đơn, dòng lệnh này xẽ gây ra lỗi Constraint và nhảy xuống catch
+        await conn.query("DELETE FROM phieuthue WHERE SoPhieu = ?", [id]);
+
+        await conn.commit();
+        res.json({ message: "Xóa phiếu thuê thành công!" });
+
+    } catch (err) {
+        await conn.rollback(); // Hoàn tác nếu có lỗi
+
+        // Mã lỗi 1451: Cannot delete or update a parent row: a foreign key constraint fails
+        if (err.errno === 1451) {
+            return res.status(400).json({ 
+                message: "Không thể xóa: Phiếu thuê này ĐÃ CÓ HÓA ĐƠN. Vui lòng xóa hóa đơn trước nếu muốn xóa phiếu." 
+            });
+        }
+
+        console.error(err);
+        res.status(500).json({ message: "Lỗi server: " + err.message });
+    } finally {
+        conn.release(); // Trả lại connection
+    }
+};
+
+
 exports.getAllPhieuThue = async (req, res) => {
   try {
     const [rows] = await phieuThueModel.getAll();

@@ -241,6 +241,27 @@ const BookingManagement = () => {
     setKhachList(newList);
   };
 
+
+  const handleDelete = async (soPhieu) => {
+      if (!window.confirm(`⚠️ CẢNH BÁO: Bạn có chắc muốn xóa phiếu thuê ${soPhieu}?\nDữ liệu khách hàng trong phiếu này cũng sẽ bị xóa.`)) {
+          return;
+      }
+
+      try {
+          setLoading(true);
+          await api.delete(`/phieuthue/${soPhieu}`); // Gọi API vừa viết ở trên
+          
+          alert("✅ Xóa phiếu thuê thành công!");
+          fetchData(); // Tải lại danh sách
+      } catch (error) {
+          // Backend trả về lỗi 400 kèm message nếu có hóa đơn
+          const msg = error.response?.data?.message || "Lỗi khi xóa phiếu.";
+          alert("❌ " + msg);
+      } finally {
+          setLoading(false);
+      }
+  };
+
   const addKhach = () => {
     if (khachList.length >= soKhachToiDa) return;
     setKhachList([...khachList, { ...emptyKhach }]);
@@ -506,6 +527,30 @@ const BookingManagement = () => {
                             Hủy
                             </button>
                         )}
+                        
+                        {!isDangThue && (
+                            <button
+                            style={{ 
+                                ...styles.actionBtn, 
+                                borderColor: '#ef4444', 
+                                color: '#ef4444',
+                                background: '#fee2e2'
+                            }}
+                            onClick={() => handleDelete(b.SoPhieu)}
+                            title="Xóa phiếu thuê"
+                            onMouseOver={(e) => {
+                                    e.currentTarget.style.background = '#fee2e2';
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                }}
+                                onMouseOut={(e) => {
+                                    e.currentTarget.style.background = '#fee2e2';
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                            >
+                                🗑️ Xóa
+                            </button>
+                        )}
+                        
                       </div>
                     </td>
                   </tr>

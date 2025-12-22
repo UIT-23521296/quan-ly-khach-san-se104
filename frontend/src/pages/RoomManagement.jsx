@@ -264,6 +264,9 @@ const RoomManagement = () => {
               // Có lịch sử hay chưa
               const hasHistory = (room.CoLichSu || 0) > 0; 
 
+              // Phòng có đang thuê hay không
+              const isOccupied = room.TinhTrang === 'Đã thuê';
+
               // Phòng bị coi là inactive nếu: Chính nó bị ngưng HOẶC Loại phòng của nó bị ngưng
               const isInactive = isRoomStopped || isTypeStopped;
 
@@ -359,22 +362,29 @@ const RoomManagement = () => {
                                 </button>
                             )}
 
-                            {hasHistory ? (
-                                <button 
-                                    style={styles.stopBtn} 
-                                    onClick={() => handleBusinessStatus(room, 'stop')}
-                                    title="Phòng đã có dữ liệu, chỉ có thể ngưng kinh doanh"
-                                >
-                                    ⛔ Ngưng KD
-                                </button>
+                            {/* 3. Nút Ngưng KD / Xóa: Ẩn hoặc Disable nếu đang thuê */}
+                            {isOccupied ? (
+                                // Nếu đang thuê -> Hiển thị thông báo hoặc nút mờ
+                                <span style={{fontSize: '11px', color: '#dc2626', fontWeight: 'bold', padding: '6px'}}>⛔ Đang thuê</span>
                             ) : (
-                                <button
-                                  style={styles.deleteButton}
-                                  onClick={() => handleDelete(room.MaPhong)}
-                                  title="Phòng chưa có dữ liệu, có thể xóa vĩnh viễn"
-                                >
-                                  Xoá
-                                </button>
+                                // Nếu KHÔNG thuê -> Hiện nút bình thường
+                                hasHistory ? (
+                                    <button 
+                                        style={styles.stopBtn} 
+                                        onClick={() => handleBusinessStatus(room, 'stop')}
+                                        title="Phòng đã có dữ liệu, chỉ có thể ngưng kinh doanh"
+                                    >
+                                        ⛔ Ngưng KD
+                                    </button>
+                                ) : (
+                                    <button
+                                      style={styles.deleteButton}
+                                      onClick={() => handleDelete(room.MaPhong)}
+                                      title="Phòng chưa có dữ liệu, có thể xóa vĩnh viễn"
+                                    >
+                                      Xoá
+                                    </button>
+                                )
                             )}
                           </>
                       )}
