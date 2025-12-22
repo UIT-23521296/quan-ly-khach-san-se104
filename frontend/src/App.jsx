@@ -16,6 +16,7 @@ import InvoiceManagement from "./pages/InvoiceManagement";
 import RoomSearch from "./pages/RoomSearch";
 import ReportManagement from "./pages/ReportManagement";
 import Settings from "./pages/Settings";
+import CustomerManagement from "./pages/CustomerManagement";
 
 function PrivateLayout({ children }) {
   const token = localStorage.getItem("token");
@@ -105,6 +106,15 @@ function App() {
           element={
             <PrivateLayout>
               <Settings />
+            </PrivateLayout>
+          }
+        />
+
+        <Route
+          path="/customers"
+          element={
+            <PrivateLayout>
+              <CustomerManagement />
             </PrivateLayout>
           }
         />

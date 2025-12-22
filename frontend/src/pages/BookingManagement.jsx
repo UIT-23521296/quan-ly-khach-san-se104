@@ -727,47 +727,87 @@ const BookingManagement = () => {
                                 </tr>
                             </thead>
                             <tbody style={{borderTop: '1px solid #e2e8f0'}}>
-                                <tr>
-                                    <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>
-                                        <strong>Tiền thuê phòng</strong>
-                                        <div style={{fontSize: '12px', color: '#64748b', marginTop: '2px'}}>
-                                            Đơn giá: {Number(billPreview.DonGia).toLocaleString()} đ/ngày
-                                        </div>
-                                    </td>
-                                    <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>
-                                        {billPreview.SoNgay} ngày
-                                    </td>
-                                    <td style={{padding: '12px', textAlign: 'right', fontWeight: 'bold', color: '#334155', borderBottom: '1px dashed #e2e8f0'}}>
-                                        {Number(billPreview.DonGia * billPreview.SoNgay).toLocaleString()}
-                                    </td>
-                                </tr>
+                                {/* --- KHỐI TÍNH TOÁN GIÁ TRỊ (Logic hiển thị) --- */}
+                                {(() => {
+                                    // Tính toán các giá trị để hiển thị
+                                    const tienPhong = billPreview.DonGia * billPreview.SoNgay;
+                                    const tienPhuThu = tienPhong * billPreview.TiLePhuThu;
+                                    // Tính tiền chênh lệch do hệ số khách nước ngoài: (Tiền phòng + Phụ thu) * (Hệ số - 1)
+                                    const tienKhachNN = (tienPhong + tienPhuThu) * (billPreview.HeSoKhach - 1);
+                                    // Tính số khách vượt
+                                    const khachVuot = billPreview.SoKhach - (billPreview.SoKhachKhongTinhPhuThu || 2);
 
-                                {billPreview.TiLePhuThu > 0 && (
-                                    <tr style={{color: '#d97706', background: '#fffbeb'}}>
-                                        <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>Phụ thu quá tải ({billPreview.SoKhach} khách)</td>
-                                        <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>+{billPreview.TiLePhuThu * 100}%</td>
-                                        <td style={{padding: '12px', textAlign: 'right', fontStyle: 'italic', borderBottom: '1px dashed #e2e8f0'}}>
-                                            (Hệ số {1 + billPreview.TiLePhuThu})
-                                        </td>
-                                    </tr>
-                                )}
+                                    return (
+                                        <>
+                                            {/* 1. TIỀN THUÊ PHÒNG */}
+                                            <tr>
+                                                <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>
+                                                    <strong>Tiền thuê phòng</strong>
+                                                    <div style={{fontSize: '12px', color: '#64748b', marginTop: '2px'}}>
+                                                        Đơn giá: {Number(billPreview.DonGia).toLocaleString()} đ/ngày
+                                                    </div>
+                                                </td>
+                                                <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>
+                                                    {billPreview.SoNgay} ngày
+                                                </td>
+                                                <td style={{padding: '12px', textAlign: 'right', fontWeight: 'bold', color: '#334155', borderBottom: '1px dashed #e2e8f0'}}>
+                                                    {Number(tienPhong).toLocaleString()}
+                                                </td>
+                                            </tr>
 
-                                {billPreview.HeSoKhach > 1 && (
-                                    <tr style={{color: '#059669', background: '#f0fdf4'}}>
-                                        <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>Hệ số khách nước ngoài</td>
-                                        <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>x {billPreview.HeSoKhach}</td>
-                                        <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}></td>
-                                    </tr>
-                                )}
+                                            {/* 2. PHỤ THU QUÁ TẢI (Sửa hiển thị) */}
+                                            {billPreview.TiLePhuThu > 0 && (
+                                                <tr style={{color: '#d97706', background: '#fffbeb'}}>
+                                                    <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>
+                                                        {/* Đổi text: Hiển thị số khách vượt */}
+                                                        Phụ thu quá tải (vượt {khachVuot} khách)
+                                                    </td>
+                                                    <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>
+                                                        +{billPreview.TiLePhuThu * 100}%
+                                                    </td>
+                                                    <td style={{padding: '12px', textAlign: 'right', fontWeight: 'bold', borderBottom: '1px dashed #e2e8f0'}}>
+                                                        {/* Đổi giá trị: Hiển thị tiền phụ thu */}
+                                                        {Number(tienPhuThu).toLocaleString()}
+                                                    </td>
+                                                </tr>
+                                            )}
 
-                                <tr style={{borderTop: '2px solid #334155', background: '#fff'}}>
-                                    <td style={{padding: '16px 12px', fontWeight: 'bold', fontSize: '15px', color: '#dc2626'}} colSpan={2}>
-                                        TỔNG TIỀN PHẢI TRẢ
-                                    </td>
-                                    <td style={{padding: '16px 12px', textAlign: 'right', fontWeight: 'bold', fontSize: '18px', color: '#dc2626'}}>
-                                        {Number(billPreview.ThanhTien).toLocaleString()} VND
-                                    </td>
-                                </tr>
+                                            {/* 3. HỆ SỐ KHÁCH NƯỚC NGOÀI */}
+                                            {billPreview.HeSoKhach > 1 && (
+                                                <tr style={{color: '#059669', background: '#f0fdf4'}}>
+                                                    <td style={{padding: '12px', borderBottom: '1px dashed #e2e8f0'}}>
+                                                        Phụ thu khách nước ngoài
+                                                    </td>
+                                                    <td style={{padding: '12px', textAlign: 'right', borderBottom: '1px dashed #e2e8f0'}}>
+                                                        {/* --- SỬA ĐỔI Ở ĐÂY: Hiển thị 0.5 thay vì 1.5 --- */}
+                                                        <div style={{fontWeight: 'bold'}}>
+                                                            x {Number(billPreview.HeSoKhach - 1)} {/* VD: 1.5 - 1 = 0.5 */}
+                                                        </div>
+                                                        
+                                                        {/* Dòng chú thích rõ ràng */}
+                                                        <div style={{fontSize: '11px', fontStyle: 'italic', opacity: 0.8, marginTop: '2px'}}>
+                                                            (Tính thêm {((billPreview.HeSoKhach - 1) * 100)}% trên tổng tiền phòng & phụ thu)
+                                                        </div>
+                                                    </td>
+                                                    <td style={{padding: '12px', textAlign: 'right', fontWeight: 'bold', borderBottom: '1px dashed #e2e8f0'}}>
+                                                        {/* Giá trị tiền vẫn giữ nguyên */}
+                                                        {Number(tienKhachNN).toLocaleString()}
+                                                    </td>
+                                                </tr>
+                                            )}
+
+                                            {/* TỔNG CỘNG */}
+                                            <tr style={{borderTop: '2px solid #334155', background: '#fff'}}>
+                                                <td style={{padding: '16px 12px', fontWeight: 'bold', fontSize: '15px', color: '#dc2626'}} colSpan={2}>
+                                                    TỔNG TIỀN PHẢI TRẢ
+                                                </td>
+                                                <td style={{padding: '16px 12px', textAlign: 'right', fontWeight: 'bold', fontSize: '18px', color: '#dc2626'}}>
+                                                    {Number(billPreview.ThanhTien).toLocaleString()} VND
+                                                </td>
+                                            </tr>
+                                        </>
+                                    );
+                                })()}
                             </tbody>
                         </table>
 

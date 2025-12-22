@@ -10,6 +10,7 @@ const Sidebar = ({ activeMenu, setActiveMenu }) => {
     { id: "room-search", icon: "🔍", label: "Tra cứu phòng", path: "/room-search" },
     { id: "rooms", icon: "🛏️", label: "Danh mục phòng", path: "/rooms" },
     { id: "booking", icon: "📝", label: "Thuê phòng", path: "/phieuthue" },
+    { id: "customers", icon: "👥", label: "Khách hàng", path: "/customers" },
     { id: "invoice", icon: "💵", label: "Hóa đơn", path: "/invoice" },
     { id: "report", icon: "📈", label: "Báo cáo doanh thu", path: "/report" },
     { id: "settings", icon: "⚙️", label: "Qui định", path: "/settings" },

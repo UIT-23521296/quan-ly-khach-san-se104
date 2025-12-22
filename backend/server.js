@@ -23,6 +23,7 @@ const phieuthueRoutes = require("./routes/phieuthueRoutes");
 const loaikhachRoutes = require("./routes/loaikhachRoutes");
 const hoadonRoutes = require("./routes/hoadonRoutes");
 const baocaoRoutes = require("./routes/baocaoRoutes");
+const khachhangRoutes = require("./routes/khachhangRoutes");
 
 // ==== SỬ DỤNG ROUTES ====
 app.use("/api/auth", authRoutes);
@@ -34,6 +35,8 @@ app.use("/api/loaikhach", loaikhachRoutes);
 app.use("/api/hoadon", hoadonRoutes);
 app.use("/api/baocao", baocaoRoutes);
 app.use("/api/quidinh", require("./routes/quidinhRoutes"));
+app.use("/api/khachhang", khachhangRoutes);
+app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 
 // Test API
 app.get("/api/test", (req, res) => {

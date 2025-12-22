@@ -81,7 +81,7 @@ const RoomManagement = () => {
 
   const closeModal = () => setIsModalOpen(false);
   const handleChange = (e) => setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
-  
+
   const validate = () => {
     const errs = {};
     if (!form.tenPhong.trim()) errs.tenPhong = "Tên phòng không được trống";
@@ -131,15 +131,21 @@ const RoomManagement = () => {
     }
   };
 
+  // --- CẬP NHẬT HÀM XÓA ---
   const handleDelete = async (id) => {
-    if (!window.confirm("⚠️ Phòng này chưa có dữ liệu lịch sử. Bạn có chắc muốn XÓA vĩnh viễn?")) return;
+    // 1. Hỏi xác nhận
+    if (!window.confirm(`Bạn có chắc chắn muốn XÓA phòng ${id}?\n(Lưu ý: Nếu phòng đã từng có khách thuê, hệ thống sẽ chặn thao tác này)`)) return;
+    
     try {
+      // 2. Gọi API Xóa
       await api.delete(`/phong/${id}`);
       alert("✅ Xóa phòng thành công!");
       fetchRooms();
     } catch (error) {
       console.error("❌ Lỗi khi xóa phòng:", error);
-      alert("Không thể xóa phòng: " + (error.response?.data?.error || ""));
+      // 3. Hiển thị thông báo lỗi từ Backend (Backend trả về message cụ thể nếu vướng khóa ngoại)
+      const msg = error.response?.data?.message || "Không thể xóa phòng này.";
+      alert("❌ " + msg);
     }
   };
 
@@ -172,9 +178,7 @@ const RoomManagement = () => {
   }
 
   const filteredRooms = rooms.filter((room) => {
-    if (filterStatus !== "ALL" && room.TinhTrang !== filterStatus) {
-        return false;
-    }
+    if (filterStatus !== "ALL" && room.TinhTrang !== filterStatus) return false;
     if (!searchTerm) return true;
     const lowerTerm = searchTerm.toLowerCase();
     return (
@@ -191,9 +195,7 @@ const RoomManagement = () => {
       <div style={styles.headerRow}>
         <div>
           <h1 style={styles.title}>Danh mục phòng</h1>
-          <p style={styles.subtitle}>
-            Quản lý thông tin phòng, loại phòng và tình trạng phòng.
-          </p>
+          <p style={styles.subtitle}>Quản lý thông tin phòng, loại phòng và tình trạng phòng.</p>
         </div>
         
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -218,17 +220,11 @@ const RoomManagement = () => {
                     style={styles.searchInput}
                 />
                 {searchTerm && (
-                    <button 
-                        onClick={() => setSearchTerm("")}
-                        style={styles.clearSearchBtn}
-                        title="Xóa tìm kiếm"
-                    >✕</button>
+                    <button onClick={() => setSearchTerm("")} style={styles.clearSearchBtn} title="Xóa tìm kiếm">✕</button>
                 )}
             </div>
 
-            <button style={styles.addButton} onClick={openAddModal}>
-            + Thêm phòng
-            </button>
+            <button style={styles.addButton} onClick={openAddModal}>+ Thêm phòng</button>
         </div>
       </div>
 
@@ -257,137 +253,82 @@ const RoomManagement = () => {
                     </td>
                 </tr>
             ) : filteredRooms.map((room) => {
-              // Trạng thái Ngưng kinh doanh của chính phòng đó
               const isRoomStopped = room.TinhTrang === 'Ngưng kinh doanh';
-              // ✅ Trạng thái Ngưng kinh doanh của LOẠI PHÒNG (Lấy từ backend)
-              const isTypeStopped = room.TrangThaiLoaiPhong === 0;
-              // Có lịch sử hay chưa
-              const hasHistory = (room.CoLichSu || 0) > 0; 
-
-              // Phòng có đang thuê hay không
               const isOccupied = room.TinhTrang === 'Đã thuê';
-
-              // Phòng bị coi là inactive nếu: Chính nó bị ngưng HOẶC Loại phòng của nó bị ngưng
-              const isInactive = isRoomStopped || isTypeStopped;
+              const isMaintenance = room.TinhTrang === 'Bảo trì';
+              const isTypeStopped = room.TrangThaiLoaiPhong === 0;
 
               return (
-                <tr 
-                    key={room.MaPhong} 
-                    style={{
-                        ...styles.tr,
-                        // Nền xám nếu inactive
-                        backgroundColor: isInactive ? '#F3F4F6' : 'white',
-                        opacity: isInactive ? 0.7 : 1
-                    }}
-                >
+                <tr key={room.MaPhong} style={{...styles.tr, backgroundColor: isTypeStopped ? '#F3F4F6' : 'white', opacity: isTypeStopped ? 0.8 : 1 }}>
                   <td style={styles.td}>{room.MaPhong}</td>
                   <td style={styles.td}>{room.TenPhong}</td>
-
                   <td style={styles.td}>
                     <div style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
                         <span style={loaiPhongBadgeStyle(room.TenLoaiPhong || room.MaLoaiPhong)}>
                             {room.TenLoaiPhong || room.MaLoaiPhong}
                         </span>
-                        {/* ✅ Badge cảnh báo nếu Loại phòng bị ngưng */}
-                        {isTypeStopped && (
-                            <span style={{fontSize: '10px', background: '#374151', color: 'white', padding: '2px 6px', borderRadius: '4px'}}>
-                                ⛔ Loại đã ngưng
-                            </span>
-                        )}
+                        {isTypeStopped && <span style={{fontSize: '10px', background: '#374151', color: 'white', padding: '2px 6px', borderRadius: '4px'}}>⛔ Loại đã ngưng</span>}
                     </div>
                   </td>
-
-                  <td style={styles.td}>
-                    {room.DonGia
-                      ? Number(room.DonGia).toLocaleString("vi-VN", { minimumFractionDigits: 0 }) + " VND"
-                      : "-"}
-                  </td>
-
+                  <td style={styles.td}>{room.DonGia ? Number(room.DonGia).toLocaleString("vi-VN", { minimumFractionDigits: 0 }) + " VND" : "-"}</td>
+                  
                   <td style={{ ...styles.td, textAlign: "center" }}>
-                    {/* ✅ Nếu Loại bị ngưng và phòng đang trống -> Hiện "Tạm ngưng" */}
-                    {isTypeStopped && room.TinhTrang === 'Trống' ? (
-                        <span style={styles.inactiveBadge}>⛔ Tạm ngưng</span>
-                    ) : (
-                        <span style={statusBadgeStyle(room.TinhTrang)}>
-                            {room.TinhTrang}
-                        </span>
-                    )}
+                    <span style={statusBadgeStyle(room.TinhTrang)}>{room.TinhTrang}</span>
                   </td>
 
                   <td style={styles.td}>{room.GhiChu}</td>
 
-                  <td style={{ ...styles.td, textAlign: "center" }}>
-                    <div style={styles.actionRow}>
-                      
-                      {/* 1. Nếu chính phòng này bị Ngưng (do người dùng bấm nút Ngưng KD) */}
-                      {isRoomStopped ? (
-                          <button 
-                            style={styles.activateBtn}
-                            onClick={() => handleBusinessStatus(room, 'active')}
-                            title="Kích hoạt lại để tiếp tục cho thuê"
-                          >
-                            🔄 Kích hoạt
-                          </button>
-                      ) : isTypeStopped ? (
-                          /* 2. Nếu Loại phòng bị Ngưng -> Chỉ cho xem hoặc xóa (nếu ko có lịch sử), ko cho sửa/bảo trì */
-                          <>
-                             {hasHistory ? (
-                                 <span style={{fontSize: '12px', color: '#6b7280', fontStyle: 'italic'}}>Không khả dụng</span>
-                             ) : (
-                                <button
-                                  style={styles.deleteButton}
-                                  onClick={() => handleDelete(room.MaPhong)}
-                                >
-                                  Xoá
-                                </button>
-                             )}
-                          </>
-                      ) : (
-                          /* 3. Bình thường: Hiện đủ nút */
-                          <>
-                            <button
-                              style={styles.editButton}
-                              onClick={() => openEditModal(room)}
-                            >
-                              Sửa
+                  {/* --- PHẦN HÀNH ĐỘNG ĐƯỢC CẬP NHẬT --- */}
+                  <td style={{ ...styles.td, textAlign: "center", minWidth: '240px' }}>
+                    <div style={styles.actionGrid}>
+                        
+                        {/* 1. NÚT SỬA */}
+                        <button style={styles.btnEdit} onClick={() => openEditModal(room)} title="Sửa thông tin">
+                            Sửa
+                        </button>
+
+                        {/* 2. NÚT BẢO TRÌ */}
+                        {isMaintenance ? (
+                            <button style={styles.btnFinish} onClick={() => handleMaintenance(room)}>
+                                Xong
                             </button>
+                        ) : (
+                            <button 
+                                style={isOccupied || isRoomStopped ? styles.btnDisabled : styles.btnMaintenance} 
+                                onClick={() => !(isOccupied || isRoomStopped) && handleMaintenance(room)}
+                                disabled={isOccupied || isRoomStopped}
+                                title={isOccupied ? "Đang có khách" : "Bảo trì phòng"}
+                            >
+                                Bảo trì
+                            </button>
+                        )}
 
-                            {(room.TinhTrang === "Trống" || room.TinhTrang === "Bảo trì") && (
-                                <button
-                                    style={room.TinhTrang === "Bảo trì" ? styles.finishBtn : styles.maintenanceBtn}
-                                    onClick={() => handleMaintenance(room)}
-                                    title={room.TinhTrang === "Bảo trì" ? "Hoàn tất bảo trì" : "Đưa vào bảo trì"}
-                                >
-                                    {room.TinhTrang === "Bảo trì" ? "Xong" : "Bảo trì"}
-                                </button>
-                            )}
+                        {/* 3. NÚT NGƯNG KINH DOANH */}
+                        {isRoomStopped ? (
+                            <button style={styles.btnActive} onClick={() => handleBusinessStatus(room, 'active')}>
+                                Kích hoạt
+                            </button>
+                        ) : (
+                            <button 
+                                style={isOccupied ? styles.btnDisabled : styles.btnStop} 
+                                onClick={() => !isOccupied && handleBusinessStatus(room, 'stop')}
+                                disabled={isOccupied}
+                                title={isOccupied ? "Đang có khách" : "Ngưng kinh doanh"}
+                            >
+                                Ngưng KD
+                            </button>
+                        )}
 
-                            {/* 3. Nút Ngưng KD / Xóa: Ẩn hoặc Disable nếu đang thuê */}
-                            {isOccupied ? (
-                                // Nếu đang thuê -> Hiển thị thông báo hoặc nút mờ
-                                <span style={{fontSize: '11px', color: '#dc2626', fontWeight: 'bold', padding: '6px'}}>⛔ Đang thuê</span>
-                            ) : (
-                                // Nếu KHÔNG thuê -> Hiện nút bình thường
-                                hasHistory ? (
-                                    <button 
-                                        style={styles.stopBtn} 
-                                        onClick={() => handleBusinessStatus(room, 'stop')}
-                                        title="Phòng đã có dữ liệu, chỉ có thể ngưng kinh doanh"
-                                    >
-                                        ⛔ Ngưng KD
-                                    </button>
-                                ) : (
-                                    <button
-                                      style={styles.deleteButton}
-                                      onClick={() => handleDelete(room.MaPhong)}
-                                      title="Phòng chưa có dữ liệu, có thể xóa vĩnh viễn"
-                                    >
-                                      Xoá
-                                    </button>
-                                )
-                            )}
-                          </>
-                      )}
+                        {/* 4. NÚT XÓA */}
+                        <button 
+                            style={isOccupied ? styles.btnDisabled : styles.btnDelete} 
+                            onClick={() => !isOccupied && handleDelete(room.MaPhong)}
+                            disabled={isOccupied} // Chặn xóa nếu đang có khách ngay từ frontend cho chắc
+                            title="Xóa phòng"
+                        >
+                            Xóa
+                        </button>
+
                     </div>
                   </td>
                 </tr>
@@ -400,10 +341,7 @@ const RoomManagement = () => {
       {isModalOpen && (
         <div style={styles.modalOverlay} onClick={closeModal}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <h2 style={styles.modalTitle}>
-              {mode === "add" ? "Thêm phòng" : "Sửa phòng"}
-            </h2>
-
+            <h2 style={styles.modalTitle}>{mode === "add" ? "Thêm phòng" : "Sửa phòng"}</h2>
             <div style={styles.form}>
               <div style={styles.formRow}>
                 <div style={styles.formGroup}>
@@ -413,25 +351,11 @@ const RoomManagement = () => {
                     value={form.tenPhong}
                     onChange={handleChange}
                     disabled={mode === "edit" && isRented} 
-                    style={{
-                        ...styles.input,
-                        backgroundColor: (mode === "edit" && isRented) ? "#f3f4f6" : "white",
-                        cursor: (mode === "edit" && isRented) ? "not-allowed" : "text"
-                    }}
+                    style={{...styles.input, backgroundColor: (mode === "edit" && isRented) ? "#f3f4f6" : "white", cursor: (mode === "edit" && isRented) ? "not-allowed" : "text"}}
                   />
-                  {mode === "add" && (
-                    <p style={{ fontSize: "0.75rem", color: "#6B7280", marginTop: "0.25rem" }}>
-                      VD: Nhập "Phòng 101" → Mã phòng sẽ tự tạo là P101
-                    </p>
-                  )}
-                  {mode === "edit" && isRented && (
-                    <p style={{ fontSize: "0.75rem", color: "#EF4444", marginTop: "0.25rem" }}>
-                        🔒 Phòng đang thuê, không thể sửa Tên phòng.
-                    </p>
-                  )}
-                  {errors.tenPhong && (
-                    <span style={styles.errorText}>{errors.tenPhong}</span>
-                  )}
+                  {mode === "add" && <p style={{ fontSize: "0.75rem", color: "#6B7280", marginTop: "0.25rem" }}>VD: Nhập "Phòng 101" → Mã phòng sẽ tự tạo là P101</p>}
+                  {mode === "edit" && isRented && <p style={{ fontSize: "0.75rem", color: "#EF4444", marginTop: "0.25rem" }}>🔒 Phòng đang thuê, không thể sửa Tên phòng.</p>}
+                  {errors.tenPhong && <span style={styles.errorText}>{errors.tenPhong}</span>}
                 </div>
               </div>
 
@@ -443,61 +367,28 @@ const RoomManagement = () => {
                     value={form.loaiPhong}
                     onChange={handleChange}
                     disabled={isRented}
-                    style={{
-                        ...styles.input,
-                        backgroundColor: isRented ? "#f3f4f6" : "white",
-                        cursor: isRented ? "not-allowed" : "pointer"
-                    }}
+                    style={{...styles.input, backgroundColor: isRented ? "#f3f4f6" : "white", cursor: isRented ? "not-allowed" : "pointer"}}
                   >
                     <option value="">-- Chọn loại phòng --</option>
                     {roomTypes.map((type) => (
-                      <option key={type.MaLoaiPhong} value={type.MaLoaiPhong}>
-                        {type.TenLoaiPhong} -{" "}
-                        {Number(type.DonGia).toLocaleString("vi-VN")} VND
-                      </option>
+                      <option key={type.MaLoaiPhong} value={type.MaLoaiPhong}>{type.TenLoaiPhong} - {Number(type.DonGia).toLocaleString("vi-VN")} VND</option>
                     ))}
                   </select>
-                  {isRented && (
-                    <p style={{ fontSize: "0.75rem", color: "#EF4444", marginTop: "0.25rem" }}>
-                        🔒 Phòng đang thuê, không thể đổi Loại phòng.
-                    </p>
-                  )}
-                  {errors.loaiPhong && (
-                    <span style={styles.errorText}>{errors.loaiPhong}</span>
-                  )}
+                  {isRented && <p style={{ fontSize: "0.75rem", color: "#EF4444", marginTop: "0.25rem" }}>🔒 Phòng đang thuê, không thể đổi Loại phòng.</p>}
+                  {errors.loaiPhong && <span style={styles.errorText}>{errors.loaiPhong}</span>}
                 </div>
               </div>
 
               <div style={styles.formRow}>
                 <div style={styles.formGroup}>
                   <label>Ghi chú</label>
-                  <input
-                    name="ghiChu"
-                    value={form.ghiChu}
-                    onChange={handleChange}
-                    style={styles.input}
-                    placeholder="Ghi chú thêm..."
-                  />
+                  <input name="ghiChu" value={form.ghiChu} onChange={handleChange} style={styles.input} placeholder="Ghi chú thêm..." />
                 </div>
               </div>
 
               <div style={styles.modalActions}>
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  style={styles.cancelButton}
-                  disabled={loading}
-                >
-                  Hủy
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSubmit}
-                  style={styles.saveButton}
-                  disabled={loading}
-                >
-                  {loading ? "⏳ Đang lưu..." : mode === "add" ? "Lưu" : "Cập nhật"}
-                </button>
+                <button type="button" onClick={closeModal} style={styles.cancelButton} disabled={loading}>Hủy</button>
+                <button type="button" onClick={handleSubmit} style={styles.saveButton} disabled={loading}>{loading ? "⏳ Đang lưu..." : mode === "add" ? "Lưu" : "Cập nhật"}</button>
               </div>
             </div>
           </div>
@@ -507,237 +398,54 @@ const RoomManagement = () => {
   );
 };
 
-// ===== STYLES =====
+// ===== STYLES MỚI CHO 4 NÚT =====
 const styles = {
-  wrapper: {
-    width: "100%",
-    maxWidth: "1400px",
-    margin: "0 auto",
-    padding: "2rem 2rem 3rem",
+  wrapper: { width: "100%", maxWidth: "1400px", margin: "0 auto", padding: "2rem 2rem 3rem" },
+  headerRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" },
+  title: { fontSize: "2rem", fontWeight: 700, color: "#1F2A40" },
+  subtitle: { marginTop: "0.3rem", color: "#6B7280" },
+  searchInput: { padding: "0.6rem 1rem", borderRadius: "8px", border: "1px solid #D1D5DB", fontSize: "0.95rem", width: "220px", outline: "none" },
+  filterSelect: { padding: "0.6rem 1rem", borderRadius: "8px", border: "1px solid #D1D5DB", fontSize: "0.95rem", outline: "none", cursor: "pointer", backgroundColor: "white" },
+  clearSearchBtn: { position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#999', cursor: 'pointer', fontWeight: 'bold' },
+  addButton: { padding: "0.6rem 1.4rem", backgroundColor: "#3A7DFF", color: "white", borderRadius: "8px", border: "none", cursor: "pointer", fontWeight: 600, boxShadow: "0 5px 14px rgba(58, 125, 255, 0.35)", whiteSpace: 'nowrap' },
+  tableCard: { background: "white", borderRadius: "16px", boxShadow: "0 8px 20px rgba(15, 23, 42, 0.08)", padding: "1.5rem", overflowX: "auto" },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: "0.95rem" },
+  th: { padding: "12px 16px", backgroundColor: "#F9FAFB", borderBottom: "2px solid #E5E7EB", fontWeight: 600, color: "#374151", textAlign: "left" },
+  tr: { borderBottom: "1px solid #E5E7EB", transition: '0.2s' },
+  td: { padding: "12px 16px", verticalAlign: "middle" },
+  
+  // --- STYLE MỚI CHO GRID BUTTONS ---
+  actionGrid: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr', // 2 cột
+      gap: '6px',
   },
-  headerRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: "1.5rem",
-  },
-  title: {
-    fontSize: "2rem",
-    fontWeight: 700,
-    color: "#1F2A40",
-  },
-  subtitle: {
-    marginTop: "0.3rem",
-    color: "#6B7280",
-  },
-  searchInput: {
-    padding: "0.6rem 1rem",
-    borderRadius: "8px",
-    border: "1px solid #D1D5DB",
-    fontSize: "0.95rem",
-    width: "220px",
-    outline: "none",
-  },
-  filterSelect: {
-    padding: "0.6rem 1rem",
-    borderRadius: "8px",
-    border: "1px solid #D1D5DB",
-    fontSize: "0.95rem",
-    outline: "none",
-    cursor: "pointer",
-    backgroundColor: "white",
-  },
-  clearSearchBtn: {
-    position: 'absolute',
-    right: '10px',
-    top: '50%',
-    transform: 'translateY(-50%)',
-    background: 'transparent',
-    border: 'none',
-    color: '#999',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-  },
-  addButton: {
-    padding: "0.6rem 1.4rem",
-    backgroundColor: "#3A7DFF",
-    color: "white",
-    borderRadius: "8px",
-    border: "none",
-    cursor: "pointer",
-    fontWeight: 600,
-    boxShadow: "0 5px 14px rgba(58, 125, 255, 0.35)",
-    whiteSpace: 'nowrap',
-  },
-  tableCard: {
-    background: "white",
-    borderRadius: "16px",
-    boxShadow: "0 8px 20px rgba(15, 23, 42, 0.08)",
-    padding: "1.5rem",
-    overflowX: "auto",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: "0.95rem",
-  },
-  th: {
-    padding: "12px 16px",
-    backgroundColor: "#F9FAFB",
-    borderBottom: "2px solid #E5E7EB",
-    fontWeight: 600,
-    color: "#374151",
-    textAlign: "left",
-  },
-  tr: {
-    borderBottom: "1px solid #E5E7EB",
-    transition: '0.2s',
-  },
-  td: {
-    padding: "12px 16px",
-    verticalAlign: "middle",
-  },
-  actionRow: {
-    display: "flex",
-    justifyContent: "center",
-    gap: "0.5rem",
-  },
-  editButton: {
-    background: "#3A7DFF",
-    color: "white",
-    padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    cursor: "pointer",
-    fontSize: "0.875rem",
-    fontWeight: 500,
-  },
-  deleteButton: {
-    background: "#EF4444",
-    color: "white",
-    padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    cursor: "pointer",
-    fontSize: "0.875rem",
-    fontWeight: 500,
-  },
-  maintenanceBtn: {
-    background: "#F59E0B",
-    color: "white",
-    padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    cursor: "pointer",
-    fontSize: "0.875rem",
-    fontWeight: 500,
-  },
-  finishBtn: {
-    background: "#10B981",
-    color: "white",
-    padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    cursor: "pointer",
-    fontSize: "0.875rem",
-    fontWeight: 500,
-  },
-  stopBtn: {
-    background: "#374151",
-    color: "white",
-    padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    cursor: "pointer",
-    fontSize: "0.875rem",
-    fontWeight: 500,
-  },
-  activateBtn: {
-    background: "#059669",
-    color: "white",
-    padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    cursor: "pointer",
-    fontSize: "0.875rem",
-    fontWeight: "bold",
-  },
-  // Badge xám cho trạng thái inactive
-  inactiveBadge: {
-      display: "inline-block", padding: "6px 12px", borderRadius: "20px", fontWeight: 600, fontSize: "0.85rem", 
-      backgroundColor: "#e5e7eb", color: "#6b7280", minWidth: "80px", textAlign: 'center', border: '1px solid #d1d5db'
-  },
-  modalOverlay: {
-    position: "fixed",
-    inset: 0,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 999,
-  },
-  modal: {
-    width: "100%",
-    maxWidth: "680px",
-    background: "white",
-    padding: "2rem",
-    borderRadius: "16px",
-    boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
-  },
-  modalTitle: {
-    fontSize: "1.4rem",
-    marginBottom: "1rem",
-    fontWeight: 700,
-    color: "#1F2A40",
-  },
-  form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "1rem",
-  },
-  formRow: {
-    display: "flex",
-    gap: "1rem",
-  },
-  formGroup: {
-    flex: 1,
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.3rem",
-  },
-  input: {
-    padding: "0.55rem 0.75rem",
-    borderRadius: "8px",
-    border: "1px solid #D1D5DB",
-    fontSize: "0.95rem",
-  },
-  errorText: {
-    color: "#EF4444",
-    fontSize: "0.8rem",
-    marginTop: "0.2rem",
-  },
-  modalActions: {
-    display: "flex",
-    justifyContent: "flex-end",
-    gap: "0.8rem",
-    marginTop: "1rem",
-  },
-  cancelButton: {
-    padding: "0.5rem 1.2rem",
-    borderRadius: "8px",
-    border: "1px solid #D1D5DB",
-    background: "white",
-    cursor: "pointer",
-  },
-  saveButton: {
-    padding: "0.5rem 1.4rem",
-    borderRadius: "8px",
-    border: "none",
-    background: "#3A7DFF",
-    color: "white",
-    cursor: "pointer",
-    fontWeight: 600,
-  },
+  // Nút Sửa (Xanh dương)
+  btnEdit: { background: "#3A7DFF", color: "white", padding: "6px", borderRadius: "4px", border: "none", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600 },
+  // Nút Bảo trì (Cam)
+  btnMaintenance: { background: "#F59E0B", color: "white", padding: "6px", borderRadius: "4px", border: "none", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600 },
+  // Nút Xong bảo trì (Xanh lá)
+  btnFinish: { background: "#10B981", color: "white", padding: "6px", borderRadius: "4px", border: "none", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600 },
+  // Nút Ngưng KD (Xám đậm)
+  btnStop: { background: "#374151", color: "white", padding: "6px", borderRadius: "4px", border: "none", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600 },
+  // Nút Kích hoạt (Xanh lá đậm)
+  btnActive: { background: "#059669", color: "white", padding: "6px", borderRadius: "4px", border: "none", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600 },
+  // Nút Xóa (Đỏ)
+  btnDelete: { background: "#EF4444", color: "white", padding: "6px", borderRadius: "4px", border: "none", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600 },
+  // Nút bị vô hiệu hóa
+  btnDisabled: { background: "#E5E7EB", color: "#9CA3AF", padding: "6px", borderRadius: "4px", border: "none", cursor: "not-allowed", fontSize: "0.75rem", fontWeight: 600 },
+
+  modalOverlay: { position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.35)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 999 },
+  modal: { width: "100%", maxWidth: "680px", background: "white", padding: "2rem", borderRadius: "16px", boxShadow: "0 20px 40px rgba(0,0,0,0.2)" },
+  modalTitle: { fontSize: "1.4rem", marginBottom: "1rem", fontWeight: 700, color: "#1F2A40" },
+  form: { display: "flex", flexDirection: "column", gap: "1rem" },
+  formRow: { display: "flex", gap: "1rem" },
+  formGroup: { flex: 1, display: "flex", flexDirection: "column", gap: "0.3rem" },
+  input: { padding: "0.55rem 0.75rem", borderRadius: "8px", border: "1px solid #D1D5DB", fontSize: "0.95rem" },
+  errorText: { color: "#EF4444", fontSize: "0.8rem", marginTop: "0.2rem" },
+  modalActions: { display: "flex", justifyContent: "flex-end", gap: "0.8rem", marginTop: "1rem" },
+  cancelButton: { padding: "0.5rem 1.2rem", borderRadius: "8px", border: "1px solid #D1D5DB", background: "white", cursor: "pointer" },
+  saveButton: { padding: "0.5rem 1.4rem", borderRadius: "8px", border: "none", background: "#3A7DFF", color: "white", cursor: "pointer", fontWeight: 600 },
 };
 
 const loaiPhongBadgeStyle = (loai) => {
@@ -752,49 +460,16 @@ const loaiPhongBadgeStyle = (loai) => {
     "Loại D": { bg: "#E9D5FF", color: "#7C3AED" },
   };
   const style = colors[loai] || { bg: "#E0EAFF", color: "#1E40AF" };
-  return {
-    display: "inline-block",
-    padding: "4px 12px",
-    borderRadius: "8px",
-    fontWeight: 600,
-    fontSize: "0.85rem",
-    backgroundColor: style.bg,
-    color: style.color,
-    minWidth: "36px",
-    textAlign: "center",
-  };
+  return { display: "inline-block", padding: "4px 12px", borderRadius: "8px", fontWeight: 600, fontSize: "0.85rem", backgroundColor: style.bg, color: style.color, minWidth: "36px", textAlign: "center" };
 };
 
 const statusBadgeStyle = (status) => {
-  let bg = "#E5E7EB";
-  let color = "#374151";
-  if (status === "Trống") {
-    bg = "#D1FAE5";
-    color = "#059669";
-  } else if (status === "Đã thuê") {
-    bg = "#FEE2E2";
-    color = "#DC2626";
-  } else if (status === "Đang dọn") {
-    bg = "#FEF3C7";
-    color = "#D97706";
-  } else if (status === "Bảo trì") {
-    bg = "#fed7aa"; 
-    color = "#c2410c";
-  } else if (status === "Ngưng kinh doanh") {
-    bg = "#4b5563"; 
-    color = "#ffffff";
-  }
-
-  return {
-    display: "inline-block",
-    padding: "4px 12px",
-    borderRadius: "10px",
-    fontWeight: 600,
-    fontSize: "0.85rem",
-    backgroundColor: bg,
-    color,
-    minWidth: "80px",
-  };
+  let bg = "#E5E7EB"; let color = "#374151";
+  if (status === "Trống") { bg = "#D1FAE5"; color = "#059669"; }
+  else if (status === "Đã thuê") { bg = "#FEE2E2"; color = "#DC2626"; }
+  else if (status === "Bảo trì") { bg = "#fed7aa"; color = "#c2410c"; }
+  else if (status === "Ngưng kinh doanh") { bg = "#4b5563"; color = "#ffffff"; }
+  return { display: "inline-block", padding: "4px 12px", borderRadius: "10px", fontWeight: 600, fontSize: "0.85rem", backgroundColor: bg, color, minWidth: "80px" };
 };
 
 export default RoomManagement;
