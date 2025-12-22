@@ -9,6 +9,7 @@ const ReportManagement = () => {
   const [reportData, setReportData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [totalRevenue, setTotalRevenue] = useState(0);
+  const [isViewSaved, setIsViewSaved] = useState(false);
 
   const handleCreateReport = async () => {
     setLoading(true);
@@ -28,6 +29,60 @@ const ReportManagement = () => {
       alert("Lỗi lập báo cáo: " + err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // --- LƯU DB ---
+  const handleSaveToDB = async () => {
+    if (!reportData || reportData.length === 0) {
+        alert("⚠️ Chưa có dữ liệu để lưu!");
+        return;
+    }
+    if (!window.confirm("Bạn có chắc muốn lưu báo cáo này vào hệ thống?")) return;
+
+    setLoading(true);
+    try {
+        // Gửi request lưu
+        await api.post("/baocao/save", {
+            thang: reportType === 'month' ? month : 'ALL',
+            nam: year
+        });
+        alert("✅ Lưu báo cáo thành công!");
+    } catch (err) {
+        alert("❌ Lỗi: " + (err.response?.data?.message || "Không thể lưu báo cáo"));
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  // --- XEM BÁO CÁO ĐÃ LƯU ---
+  const handleViewSaved = async () => {
+    setLoading(true);
+    try {
+        let url = `/baocao/saved?nam=${year}`;
+        if (reportType === 'month') {
+            url += `&thang=${month}`;
+        }
+
+        const res = await api.get(url);
+        const data = res.data;
+
+        if (data.length === 0) {
+            alert(`⚠️ Chưa có báo cáo nào được lưu cho ${reportType === 'month' ? `tháng ${month}` : 'năm'} ${year}.`);
+            setReportData(null);
+            setTotalRevenue(0);
+        } else {
+            // Tính tổng doanh thu để hiển thị phần trăm
+            const total = data.reduce((sum, item) => sum + Number(item.DoanhThu), 0);
+            setTotalRevenue(total);
+            setReportData(data);
+            setIsViewSaved(true); // Đánh dấu là đang xem bản đã lưu
+            alert("✅ Đã tải dữ liệu từ báo cáo đã lưu.");
+        }
+    } catch (err) {
+        alert("❌ Lỗi: " + err.message);
+    } finally {
+        setLoading(false);
     }
   };
 
@@ -139,9 +194,29 @@ const ReportManagement = () => {
                 <input type="number" value={year} onChange={(e) => setYear(e.target.value)} style={styles.input}/>
             </div>
 
-            <button onClick={handleCreateReport} style={styles.reportBtn} disabled={loading}>
-                {loading ? "⏳..." : "📊 Lập báo cáo"}
-            </button>
+            <div style={{display: 'flex', gap: '10px'}}>
+                {/* Nút Lập Báo Cáo (Tính toán lại từ đầu) */}
+                <button 
+                    onClick={() => {
+                        setIsViewSaved(false); // Reset về chế độ Live
+                        handleCreateReport();
+                    }} 
+                    style={styles.reportBtn} 
+                    disabled={loading}
+                >
+                    {loading ? "⏳..." : "⚡ Lập báo cáo mới"}
+                </button>
+
+                {/* --- NÚT MỚI: XEM ĐÃ LƯU --- */}
+                <button 
+                    onClick={handleViewSaved} 
+                    style={styles.viewSavedBtn} 
+                    disabled={loading}
+                    title="Xem lại báo cáo đã lưu trong Database"
+                >
+                    📂 Xem đã lưu
+                </button>
+            </div>
         </div>
       </div>
 
@@ -150,16 +225,25 @@ const ReportManagement = () => {
             <div style={styles.reportHeader}>
                 <div>
                     <h3 style={{margin: 0, color: '#1e293b', textTransform: 'uppercase'}}>
+                        {/* Thêm label để biết đang xem loại nào */}
+                        {isViewSaved ? "(BẢN ĐÃ LƯU) " : "(BẢN TẠM TÍNH) "} 
                         KẾT QUẢ: {reportType === 'month' ? `THÁNG ${month}` : 'CẢ NĂM'} / {year}
                     </h3>
-                    
-                    {/* ✅ HIỂN THỊ DÒNG CHỮ TÍNH ĐẾN NGÀY Ở ĐÂY */}
                     <span style={{fontSize: '14px', color: '#64748b', fontStyle: 'italic', marginTop: '5px', display: 'block'}}>
                         {renderTimeText()}
                     </span>
                 </div>
                 
-                <button style={styles.printBtn} onClick={handlePrint}>🖨️ In Báo Cáo</button>
+                <div style={{display: 'flex', gap: '10px'}}>
+                    {/* Chỉ hiện nút Lưu nếu đang xem bản Tạm tính (Live) */}
+                    {!isViewSaved && (
+                        <button style={styles.saveBtn} onClick={handleSaveToDB}>
+                            💾 Lưu Báo Cáo
+                        </button>
+                    )}
+                    
+                    <button style={styles.printBtn} onClick={handlePrint}>🖨️ In Báo Cáo</button>
+                </div>
             </div>
 
             <div style={styles.tableCard} id="report-print-section">
@@ -236,6 +320,34 @@ const styles = {
   th: { padding: "16px 24px", textAlign: "left", color: "#fff", fontWeight: "600", textTransform: "uppercase", fontSize: "13px", letterSpacing: "0.5px" },
   td: { padding: "16px 24px", borderBottom: "1px solid #f1f5f9", color: "#334155", fontSize: "15px" },
   tr: { transition: "0.2s" },
+  saveBtn: { 
+      padding: "8px 16px", 
+      background: "#10b981", // Màu xanh lá
+      color: "white", 
+      border: "none", 
+      borderRadius: "6px", 
+      fontSize: "14px", 
+      fontWeight: "600", 
+      cursor: "pointer", 
+      display: 'flex', 
+      alignItems: 'center', 
+      gap: '5px',
+      boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
+  },
+  viewSavedBtn: { 
+      padding: "10px 24px", 
+      background: "#fff", 
+      color: "#4f46e5", // Màu tím/xanh đậm khác biệt chút
+      border: "1px solid #c7d2fe", 
+      borderRadius: "8px", 
+      fontSize: "15px", 
+      fontWeight: "600", 
+      cursor: "pointer", 
+      height: "42px",
+      display: 'flex',
+      alignItems: 'center',
+      gap: '5px'
+  },
 };
 
 export default ReportManagement;
