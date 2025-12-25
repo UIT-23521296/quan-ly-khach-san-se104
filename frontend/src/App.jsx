@@ -17,6 +17,7 @@ import RoomSearch from "./pages/RoomSearch";
 import ReportManagement from "./pages/ReportManagement";
 import Settings from "./pages/Settings";
 import CustomerManagement from "./pages/CustomerManagement";
+import StaffManagement from "./pages/StaffManagement";
 
 function PrivateLayout({ children }) {
   const token = localStorage.getItem("token");
@@ -33,6 +34,18 @@ function PrivateLayout({ children }) {
     </div>
   );
 }
+
+function RequireRole({ allow, children }) {
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const role = user?.vaiTro; // 'Admin' | 'User'
+
+  if (!role) return <Navigate to="/login" replace />;
+
+  if (!allow.includes(role)) return <Navigate to="/" replace />;
+
+  return children;
+}
+
 
 function SidebarWrapper() {
   const [activeMenu, setActiveMenu] = useState("dashboard");
@@ -96,19 +109,25 @@ function App() {
           path="/report"
           element={
             <PrivateLayout>
-              <ReportManagement />
+              <RequireRole allow={["Admin"]}>
+                <ReportManagement />
+              </RequireRole>
             </PrivateLayout>
           }
         />
+
 
         <Route
           path="/settings"
           element={
             <PrivateLayout>
-              <Settings />
+              <RequireRole allow={["Admin"]}>
+                <Settings />
+              </RequireRole>
             </PrivateLayout>
           }
         />
+
 
         <Route
           path="/customers"
@@ -118,6 +137,18 @@ function App() {
             </PrivateLayout>
           }
         />
+
+        <Route
+          path="/staff"
+          element={
+            <PrivateLayout>
+              <RequireRole allow={["Admin"]}>
+                <StaffManagement />
+              </RequireRole>
+            </PrivateLayout>
+          }
+        />
+
       </Routes>
     </Router>
   );

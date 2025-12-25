@@ -1,6 +1,9 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/baocaoController");
+const auth = require("../middleware/authMiddleware");
+const allow = require("../middleware/roleMiddleware");
+router.use(auth, allow("Admin"));
 
 // API: Lấy dữ liệu Live để preview
 router.get("/doanhthu", controller.getDoanhThuThang); 

@@ -1,23 +1,29 @@
 const express = require("express");
 const router = express.Router();
-const phongController = require("../controllers/phongController");
 
-// Lấy danh sách phòng
-router.get("/", phongController.getAllRooms);
+const auth = require("../middleware/authMiddleware");
+const allow = require("../middleware/roleMiddleware");
 
-// Thêm phòng
-router.post("/", phongController.createRoom);
+const {
+  getAllRooms,
+  getRoomById,
+  createRoom,
+  updateRoom,
+  deleteRoom,
+  toggleMaintenance,
+  toggleBusinessStatus,
+} = require("../controllers/phongController");
 
-// Cập nhật phòng
-router.put("/:id", phongController.updateRoom);
+router.use(auth);
 
-// Xóa phòng
-router.delete("/:id", phongController.deleteRoom);
+router.get("/", allow("Admin", "User"), getAllRooms);
+router.get("/:id", allow("Admin", "User"), getRoomById);
 
-// Chuyển trạng thái phòng (Bảo trì / Trống)
-router.put("/:id/maintenance", phongController.toggleMaintenance);
+router.post("/", allow("Admin"), createRoom);
+router.put("/:id", allow("Admin"), updateRoom);
+router.delete("/:id", allow("Admin"), deleteRoom);
 
-// Ngưng / Kích hoạt kinh doanh
-router.put("/:id/business", phongController.toggleBusinessStatus); 
+router.put("/:id/maintenance", allow("Admin"), toggleMaintenance);
+router.put("/:id/business", allow("Admin"), toggleBusinessStatus);
 
 module.exports = router;

@@ -5,6 +5,10 @@ import { useNavigate } from "react-router-dom";
 const Sidebar = ({ activeMenu, setActiveMenu }) => {
   const navigate = useNavigate();
 
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const role = user?.vaiTro; // 'Admin' | 'User'
+  const isAdmin = role === "Admin";
+
   const menuItems = [
     { id: "dashboard", icon: "📊", label: "Tổng quan", path: "/" },
     { id: "room-search", icon: "🔍", label: "Tra cứu phòng", path: "/room-search" },
@@ -12,8 +16,14 @@ const Sidebar = ({ activeMenu, setActiveMenu }) => {
     { id: "booking", icon: "📝", label: "Thuê phòng", path: "/phieuthue" },
     { id: "customers", icon: "👥", label: "Khách hàng", path: "/customers" },
     { id: "invoice", icon: "💵", label: "Hóa đơn", path: "/invoice" },
-    { id: "report", icon: "📈", label: "Báo cáo doanh thu", path: "/report" },
-    { id: "settings", icon: "⚙️", label: "Qui định", path: "/settings" },
+
+    ...(isAdmin
+      ? [
+          { id: "staff", icon: "🧑‍💼", label: "Quản lý nhân viên", path: "/staff" },
+          { id: "report", icon: "📈", label: "Báo cáo doanh thu", path: "/report" },
+          { id: "settings", icon: "⚙️", label: "Qui định", path: "/settings" },
+        ]
+      : []),
   ];
 
   return (

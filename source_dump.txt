@@ -1,5 +1,5 @@
 # ==================================================
-# Path: E:\Dai Hoc\Nam 3\Nhap mon CNPM\quan-ly-khach-san-se104
+# Path: D:\Github\quan-ly-khach-san-se104
 # Detected tech: docker, javascript, python, react, typescript
 # ==================================================
 
@@ -90,6 +90,7 @@ quan-ly-khach-san-se104/
 │   └── vite.config.js
 ├── .gitignore
 ├── README.md
+├── package-lock.json
 └── source_dump.txt
 ```
 
@@ -1407,7 +1408,6 @@ exports.getAll = () => {
         p.*, 
         lp.TenLoaiPhong, 
         lp.DonGia,
-        lp.DangSuDung AS TrangThaiLoaiPhong, 
         pt.NgayBatDauThue,
         pt.NgayDuKienTra,
         (SELECT COUNT(*) FROM phieuthue WHERE MaPhong = p.MaPhong) AS CoLichSu,

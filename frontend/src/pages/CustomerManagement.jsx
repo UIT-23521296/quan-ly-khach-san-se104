@@ -1,12 +1,16 @@
-import React, { useState, useEffect } from "react";
+//frontend/src/pages/CustomerManagement.jsx
+import React, { useState, useEffect, useMemo } from "react";
 import api from "../services/api";
 
 const CustomerManagement = () => {
+  const user = useMemo(() => JSON.parse(localStorage.getItem("user") || "{}"), []);
+  const isAdmin = user?.vaiTro === "Admin";
+
   const [customers, setCustomers] = useState([]);
   const [customerTypes, setCustomerTypes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  
+
   // Modal Edit
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -21,10 +25,10 @@ const CustomerManagement = () => {
     try {
       const [cusRes, typeRes] = await Promise.all([
         api.get("/khachhang"),
-        api.get("/loaikhach")
+        api.get("/loaikhach"),
       ]);
-      setCustomers(cusRes.data);
-      setCustomerTypes(typeRes.data);
+      setCustomers(cusRes.data || []);
+      setCustomerTypes(typeRes.data || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -32,65 +36,63 @@ const CustomerManagement = () => {
     }
   };
 
-  // --- LOGIC XÓA  ---
+  // --- XÓA: chỉ Admin ---
   const handleDelete = async (customer) => {
-    // 1. Hỏi xác nhận đơn giản
+    if (!isAdmin) return; // chặn an toàn
+
     const confirmMsg = `Bạn có chắc chắn muốn xóa khách hàng: ${customer.HoTen}?`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
-        setLoading(true);
-        // 2. Gọi API xóa
-        await api.delete(`/khachhang/${customer.MaKH}`);
-        
-        // 3. Nếu thành công (không có dữ liệu liên quan)
-        alert("✅ Đã xóa khách hàng thành công!");
-        fetchData();
-        
+      setLoading(true);
+      await api.delete(`/khachhang/${customer.MaKH}`);
+      alert("✅ Đã xóa khách hàng thành công!");
+      fetchData();
     } catch (err) {
-        // 4. Nếu thất bại (Backend trả về lỗi 400 do dính khóa ngoại)
-        // Hiển thị đúng thông báo mà Controller gửi về
-        const msg = err.response?.data?.message || "Không thể xóa khách hàng này.";
-        alert(msg); 
+      const msg = err.response?.data?.message || "Không thể xóa khách hàng này.";
+      alert(msg);
     } finally {
-        setLoading(false);
+      setLoading(false);
     }
   };
 
-  // --- LOGIC SỬA ---
+  // --- SỬA: chỉ Admin ---
   const openEditModal = (cus) => {
-      setEditingCustomer(cus);
-      setForm({
-          HoTen: cus.HoTen,
-          CMND: cus.CMND,
-          SDT: cus.SDT,
-          DiaChi: cus.DiaChi,
-          MaLoaiKhach: cus.MaLoaiKhach
-      });
-      setIsModalOpen(true);
+    if (!isAdmin) return; // chặn an toàn
+
+    setEditingCustomer(cus);
+    setForm({
+      HoTen: cus.HoTen,
+      CMND: cus.CMND,
+      SDT: cus.SDT,
+      DiaChi: cus.DiaChi,
+      MaLoaiKhach: cus.MaLoaiKhach,
+    });
+    setIsModalOpen(true);
   };
 
   const handleUpdate = async () => {
-      if (!form.HoTen || !form.CMND) return alert("Vui lòng điền đủ tên và CMND");
-      
-      try {
-          await api.put(`/khachhang/${editingCustomer.MaKH}`, form);
-          alert("✅ Cập nhật thành công!");
-          setIsModalOpen(false);
-          fetchData();
-      } catch (err) {
-          alert("❌ Lỗi: " + err.message);
-      }
+    if (!isAdmin) return; // chặn an toàn
+    if (!form.HoTen || !form.CMND) return alert("Vui lòng điền đủ tên và CMND");
+
+    try {
+      await api.put(`/khachhang/${editingCustomer.MaKH}`, form);
+      alert("✅ Cập nhật thành công!");
+      setIsModalOpen(false);
+      fetchData();
+    } catch (err) {
+      alert("❌ Lỗi: " + (err.response?.data?.message || err.message));
+    }
   };
 
   // --- FILTER ---
-  const filteredCustomers = customers.filter(c => {
-      const term = searchTerm.toLowerCase();
-      return (
-          c.HoTen.toLowerCase().includes(term) ||
-          c.CMND.toLowerCase().includes(term) ||
-          (c.SDT && c.SDT.includes(term))
-      );
+  const filteredCustomers = customers.filter((c) => {
+    const term = searchTerm.toLowerCase();
+    return (
+      (c.HoTen || "").toLowerCase().includes(term) ||
+      (c.CMND || "").toLowerCase().includes(term) ||
+      (c.SDT && c.SDT.includes(term))
+    );
   });
 
   return (
@@ -100,110 +102,178 @@ const CustomerManagement = () => {
           <h1 style={styles.title}>👥 Quản lý Khách Hàng</h1>
           <p style={styles.subtitle}>Danh sách khách hàng đã từng lưu trú tại khách sạn</p>
         </div>
-        
-        <div style={{position: 'relative'}}>
-            <input 
-                type="text" 
-                placeholder="🔍 Tìm tên, CMND, SĐT..." 
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                style={styles.searchInput}
-            />
-            {searchTerm && <button onClick={() => setSearchTerm("")} style={styles.clearSearchBtn}>✕</button>}
+
+        <div style={{ position: "relative" }}>
+          <input
+            type="text"
+            placeholder="🔍 Tìm tên, CMND, SĐT..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={styles.searchInput}
+          />
+          {searchTerm && (
+            <button onClick={() => setSearchTerm("")} style={styles.clearSearchBtn}>
+              ✕
+            </button>
+          )}
         </div>
       </div>
 
       <div style={styles.tableCard}>
-        {loading ? <p style={{padding: '20px', textAlign: 'center'}}>⏳ Đang tải...</p> : (
-        <table style={styles.table}>
+        {loading ? (
+          <p style={{ padding: "20px", textAlign: "center" }}>⏳ Đang tải...</p>
+        ) : (
+          <table style={styles.table}>
             <thead>
-                <tr style={styles.tableHeader}>
-                    <th style={styles.th}>Họ Tên</th>
-                    <th style={styles.th}>Loại Khách</th>
-                    <th style={styles.th}>CMND/CCCD</th>
-                    <th style={styles.th}>Liên hệ</th>
-                    <th style={{...styles.th, textAlign: 'center'}}>Trạng thái</th>
-                    <th style={{...styles.th, textAlign: 'center'}}>Thao tác</th>
-                </tr>
+              <tr style={styles.tableHeader}>
+                <th style={styles.th}>Họ Tên</th>
+                <th style={styles.th}>Loại Khách</th>
+                <th style={styles.th}>CMND/CCCD</th>
+                <th style={styles.th}>Liên hệ</th>
+                <th style={{ ...styles.th, textAlign: "center" }}>Trạng thái</th>
+
+                {/* ✅ chỉ Admin mới thấy cột thao tác */}
+                {isAdmin && <th style={{ ...styles.th, textAlign: "center" }}>Thao tác</th>}
+              </tr>
             </thead>
+
             <tbody>
-                {filteredCustomers.length === 0 ? (
-                    <tr><td colSpan="6" style={{padding: '30px', textAlign: 'center', color: '#64748b'}}>Không tìm thấy khách hàng.</td></tr>
-                ) : filteredCustomers.map((cus, idx) => (
-                    <tr key={cus.MaKH} style={{...styles.tr, background: idx % 2 === 0 ? "#f8fafc" : "#ffffff"}}>
-                        <td style={{...styles.td, fontWeight: 'bold', color: '#334155'}}>{cus.HoTen}</td>
-                        <td style={styles.td}>
-                            <span style={{
-                                padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '600',
-                                background: cus.MaLoaiKhach === 'NN' ? '#dbeafe' : '#f1f5f9',
-                                color: cus.MaLoaiKhach === 'NN' ? '#1d4ed8' : '#475569'
-                            }}>
-                                {cus.TenLoaiKhach || cus.MaLoaiKhach}
-                            </span>
-                        </td>
-                        <td style={styles.td}><span style={styles.codeBadge}>{cus.CMND}</span></td>
-                        <td style={styles.td}>
-                            <div style={{fontSize: '13px'}}>📞 {cus.SDT || "---"}</div>
-                            <div style={{fontSize: '12px', color: '#64748b'}}>📍 {cus.DiaChi || "---"}</div>
-                        </td>
-                        <td style={{...styles.td, textAlign: 'center'}}>
-                            {cus.DangThueCount > 0 ? (
-                                <span style={styles.activeBadge}>🟢 Đang ở ({cus.DangThueCount})</span>
-                            ) : (
-                                <span style={{color: '#94a3b8', fontSize: '12px'}}>Lịch sử cũ</span>
-                            )}
-                        </td>
-                        <td style={{...styles.td, textAlign: 'center'}}>
-                            <div style={{display: 'flex', justifyContent: 'center', gap: '8px'}}>
-                                <button style={styles.btnEdit} onClick={() => openEditModal(cus)}>✏️ Sửa</button>
-                                <button style={styles.btnDelete} onClick={() => handleDelete(cus)}>🗑️ Xóa</button>
-                            </div>
-                        </td>
-                    </tr>
-                ))}
+              {filteredCustomers.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={isAdmin ? 6 : 5}
+                    style={{ padding: "30px", textAlign: "center", color: "#64748b" }}
+                  >
+                    Không tìm thấy khách hàng.
+                  </td>
+                </tr>
+              ) : (
+                filteredCustomers.map((cus, idx) => (
+                  <tr
+                    key={cus.MaKH}
+                    style={{ ...styles.tr, background: idx % 2 === 0 ? "#f8fafc" : "#ffffff" }}
+                  >
+                    <td style={{ ...styles.td, fontWeight: "bold", color: "#334155" }}>{cus.HoTen}</td>
+                    <td style={styles.td}>
+                      <span
+                        style={{
+                          padding: "4px 10px",
+                          borderRadius: "6px",
+                          fontSize: "12px",
+                          fontWeight: "600",
+                          background: cus.MaLoaiKhach === "NN" ? "#dbeafe" : "#f1f5f9",
+                          color: cus.MaLoaiKhach === "NN" ? "#1d4ed8" : "#475569",
+                        }}
+                      >
+                        {cus.TenLoaiKhach || cus.MaLoaiKhach}
+                      </span>
+                    </td>
+                    <td style={styles.td}>
+                      <span style={styles.codeBadge}>{cus.CMND}</span>
+                    </td>
+                    <td style={styles.td}>
+                      <div style={{ fontSize: "13px" }}>📞 {cus.SDT || "---"}</div>
+                      <div style={{ fontSize: "12px", color: "#64748b" }}>📍 {cus.DiaChi || "---"}</div>
+                    </td>
+                    <td style={{ ...styles.td, textAlign: "center" }}>
+                      {cus.DangThueCount > 0 ? (
+                        <span style={styles.activeBadge}>🟢 Đang ở ({cus.DangThueCount})</span>
+                      ) : (
+                        <span style={{ color: "#94a3b8", fontSize: "12px" }}>Lịch sử cũ</span>
+                      )}
+                    </td>
+
+                    {/* ✅ chỉ Admin mới render nút */}
+                    {isAdmin && (
+                      <td style={{ ...styles.td, textAlign: "center" }}>
+                        <div style={{ display: "flex", justifyContent: "center", gap: "8px" }}>
+                          <button style={styles.btnEdit} onClick={() => openEditModal(cus)}>
+                            ✏️ Sửa
+                          </button>
+                          <button style={styles.btnDelete} onClick={() => handleDelete(cus)}>
+                            🗑️ Xóa
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))
+              )}
             </tbody>
-        </table>
+          </table>
         )}
       </div>
 
-      {/* MODAL EDIT */}
-      {isModalOpen && (
+      {/* ✅ Modal chỉ Admin mới được mở (đã chặn ở openEditModal, nhưng thêm lớp bảo vệ) */}
+      {isAdmin && isModalOpen && (
         <div style={styles.overlay} onClick={() => setIsModalOpen(false)}>
-            <div style={styles.modal} onClick={e => e.stopPropagation()}>
-                <h2 style={styles.modalTitle}>✏️ Cập nhật thông tin khách</h2>
-                <div style={{display: 'flex', flexDirection: 'column', gap: '15px'}}>
-                    <div style={styles.formGroup}>
-                        <label style={styles.label}>Họ tên</label>
-                        <input style={styles.input} value={form.HoTen} onChange={e => setForm({...form, HoTen: e.target.value})} />
-                    </div>
-                    <div style={{display: 'flex', gap: '15px'}}>
-                        <div style={{...styles.formGroup, flex: 1}}>
-                            <label style={styles.label}>CMND/CCCD</label>
-                            <input style={styles.input} value={form.CMND} onChange={e => setForm({...form, CMND: e.target.value})} />
-                        </div>
-                        <div style={{...styles.formGroup, flex: 1}}>
-                            <label style={styles.label}>Loại khách</label>
-                            <select style={styles.select} value={form.MaLoaiKhach} onChange={e => setForm({...form, MaLoaiKhach: e.target.value})}>
-                                {customerTypes.map(t => (
-                                    <option key={t.MaLoaiKhach} value={t.MaLoaiKhach}>{t.TenLoaiKhach}</option>
-                                ))}
-                            </select>
-                        </div>
-                    </div>
-                    <div style={styles.formGroup}>
-                        <label style={styles.label}>Số điện thoại</label>
-                        <input style={styles.input} value={form.SDT} onChange={e => setForm({...form, SDT: e.target.value})} />
-                    </div>
-                    <div style={styles.formGroup}>
-                        <label style={styles.label}>Địa chỉ</label>
-                        <input style={styles.input} value={form.DiaChi} onChange={e => setForm({...form, DiaChi: e.target.value})} />
-                    </div>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <h2 style={styles.modalTitle}>✏️ Cập nhật thông tin khách</h2>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Họ tên</label>
+                <input
+                  style={styles.input}
+                  value={form.HoTen || ""}
+                  onChange={(e) => setForm({ ...form, HoTen: e.target.value })}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: "15px" }}>
+                <div style={{ ...styles.formGroup, flex: 1 }}>
+                  <label style={styles.label}>CMND/CCCD</label>
+                  <input
+                    style={styles.input}
+                    value={form.CMND || ""}
+                    onChange={(e) => setForm({ ...form, CMND: e.target.value })}
+                  />
                 </div>
-                <div style={styles.modalActions}>
-                    <button style={styles.cancelBtn} onClick={() => setIsModalOpen(false)}>Hủy</button>
-                    <button style={styles.saveBtn} onClick={handleUpdate}>Lưu thay đổi</button>
+
+                <div style={{ ...styles.formGroup, flex: 1 }}>
+                  <label style={styles.label}>Loại khách</label>
+                  <select
+                    style={styles.select}
+                    value={form.MaLoaiKhach || ""}
+                    onChange={(e) => setForm({ ...form, MaLoaiKhach: e.target.value })}
+                  >
+                    {customerTypes.map((t) => (
+                      <option key={t.MaLoaiKhach} value={t.MaLoaiKhach}>
+                        {t.TenLoaiKhach}
+                      </option>
+                    ))}
+                  </select>
                 </div>
+              </div>
+
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Số điện thoại</label>
+                <input
+                  style={styles.input}
+                  value={form.SDT || ""}
+                  onChange={(e) => setForm({ ...form, SDT: e.target.value })}
+                />
+              </div>
+
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Địa chỉ</label>
+                <input
+                  style={styles.input}
+                  value={form.DiaChi || ""}
+                  onChange={(e) => setForm({ ...form, DiaChi: e.target.value })}
+                />
+              </div>
             </div>
+
+            <div style={styles.modalActions}>
+              <button style={styles.cancelBtn} onClick={() => setIsModalOpen(false)}>
+                Hủy
+              </button>
+              <button style={styles.saveBtn} onClick={handleUpdate}>
+                Lưu thay đổi
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

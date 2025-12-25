@@ -126,3 +126,21 @@ exports.deleteRoom = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+exports.getRoomById = async (req, res) => {
+  const { id } = req.params; // id chính là MaPhong (VD: P101)
+
+  try {
+    // Dùng lại hàm bạn đã có trong model
+    const [rows] = await phongModel.findByMaPhong(id);
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ message: "Phòng không tồn tại" });
+    }
+
+    // Trả về 1 phòng
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

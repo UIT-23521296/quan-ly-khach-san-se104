@@ -1,25 +1,28 @@
 const express = require("express");
 const router = express.Router();
+const auth = require("../middleware/authMiddleware");
+const allow = require("../middleware/roleMiddleware");
+router.use(auth);
 
 // ✅ Khai báo biến là "controller"
 const controller = require("../controllers/phieuthueController");
 
 // Lấy danh sách
-router.get("/", controller.getAllPhieuThue);
+router.get("/", allow("Admin","User"), controller.getAllPhieuThue);
 
 // Tạo mới
-router.post("/", controller.createPhieuThue);
+router.post("/", allow("Admin","User"), controller.createPhieuThue);
 
 // Cập nhật (Sửa)
-router.put("/:soPhieu", controller.updatePhieuThue);
+router.put("/:soPhieu", allow("Admin","User"), controller.updatePhieuThue);
 
 // Trả phòng
-router.put("/:soPhieu/checkout", controller.checkOut);
+router.put("/:soPhieu/checkout", allow("Admin","User"), controller.checkOut);
 
 // Hủy phiếu
-router.put("/:soPhieu/huy", controller.huyPhieu);
+router.put("/:soPhieu/huy", allow("Admin","User"), controller.huyPhieu);
 
 // Xóa phiếu
-router.delete("/:id", controller.deletePhieu);
+router.delete("/:id", allow("Admin"), controller.deletePhieu);
 
 module.exports = router;

@@ -37,6 +37,7 @@ app.use("/api/baocao", baocaoRoutes);
 app.use("/api/quidinh", require("./routes/quidinhRoutes"));
 app.use("/api/khachhang", khachhangRoutes);
 app.use("/api/dashboard", require("./routes/dashboardRoutes"));
+app.use("/api/users", require("./routes/userRoutes"));
 
 // Test API
 app.get("/api/test", (req, res) => {

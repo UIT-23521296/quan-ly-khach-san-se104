@@ -1,6 +1,9 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/quidinhController");
+const auth = require("../middleware/authMiddleware");
+const allow = require("../middleware/roleMiddleware");
+router.use(auth, allow("Admin"));
 
 // Loại phòng
 router.get("/loaiphong", controller.getLoaiPhong);
