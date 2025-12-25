@@ -6,7 +6,6 @@ exports.getAll = () => {
         p.*, 
         lp.TenLoaiPhong, 
         lp.DonGia,
-        lp.DangSuDung AS TrangThaiLoaiPhong, 
         pt.NgayBatDauThue,
         pt.NgayDuKienTra,
         (SELECT COUNT(*) FROM phieuthue WHERE MaPhong = p.MaPhong) AS CoLichSu,
