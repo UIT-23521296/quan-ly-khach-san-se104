@@ -1,21 +1,16 @@
 const db = require("../config/db");
 const { v4: uuidv4 } = require("uuid");
 
-// Hàm tính toán (Giữ nguyên, nhưng chú ý nó đã trả về TenLoaiPhong rồi)
+// 1. Tính toán doanh thu 
 const calculateRevenue = async (thang, nam) => {
     let whereClause = "YEAR(hd.NgayLap) = ?";
     let params = [nam];
-
     if (thang && thang !== 'ALL') {
         whereClause += " AND MONTH(hd.NgayLap) = ?";
         params.push(thang);
     }
-
     const sql = `
-      SELECT 
-        lp.MaLoaiPhong,
-        lp.TenLoaiPhong, -- Chúng ta sẽ lấy cái này để lưu snapshot
-        COALESCE(SUM(thuc_te.ThanhTien), 0) as DoanhThu
+      SELECT lp.MaLoaiPhong, lp.TenLoaiPhong, COALESCE(SUM(thuc_te.ThanhTien), 0) as DoanhThu
       FROM loaiphong lp
       LEFT JOIN (
           SELECT p.MaLoaiPhong, ct.ThanhTien
@@ -30,136 +25,119 @@ const calculateRevenue = async (thang, nam) => {
     return rows;
 };
 
+// API: Lấy dữ liệu Live để preview
 exports.getDoanhThuThang = async (req, res) => {
   const { thang, nam } = req.query;
-  if (!nam) return res.status(400).json({ message: "Vui lòng chọn năm" });
   try {
     const rows = await calculateRevenue(thang, nam);
     res.json(rows);
-  } catch (err) {
-    res.status(500).json({ message: "Lỗi tính toán doanh thu" });
-  }
+  } catch (err) { res.status(500).json({ message: err.message }); }
 };
 
-// --- CẬP NHẬT HÀM LƯU BÁO CÁO (SNAPSHOT) ---
+// --- API: LƯU BÁO CÁO  ---
 exports.saveReport = async (req, res) => {
     const { thang, nam } = req.body;
-    if (!nam) return res.status(400).json({ message: "Thiếu thông tin năm" });
-
     const conn = await db.promise().getConnection();
+    
     try {
         await conn.beginTransaction();
 
-        // 1. Xác định tháng (NULL nếu là báo cáo năm)
+        // 1. Tạo Header Báo Cáo
+        const maBaoCao = uuidv4();
         const dbThang = (thang && thang !== 'ALL') ? thang : null;
+        const tenBaoCao = dbThang 
+            ? `Báo cáo doanh thu Tháng ${dbThang}/${nam}` 
+            : `Báo cáo doanh thu Năm ${nam}`;
 
-        // 2. Xóa báo cáo cũ của kỳ này (để lưu đè cái mới)
-        let deleteSql = "DELETE FROM baocaodoanhthu WHERE Nam = ?";
-        let deleteParams = [nam];
-        if (dbThang) {
-            deleteSql += " AND Thang = ?";
-            deleteParams.push(dbThang);
-        } else {
-            deleteSql += " AND Thang IS NULL";
-        }
-        await conn.query(deleteSql, deleteParams);
+        await conn.query(
+            "INSERT INTO baocao (MaBaoCao, TenBaoCao, Thang, Nam) VALUES (?, ?, ?, ?)",
+            [maBaoCao, tenBaoCao, dbThang, nam]
+        );
 
-        // 3. Tính toán dữ liệu
+        // 2. Tính toán & Lưu Chi Tiết
         const data = await calculateRevenue(thang, nam);
         const totalRevenue = data.reduce((sum, item) => sum + Number(item.DoanhThu), 0);
 
-        // 4. Insert Snapshot (Lưu cả Tên Loại Phòng)
         for (const item of data) {
             const tile = totalRevenue > 0 ? (item.DoanhThu / totalRevenue) : 0;
-            const maBaoCaoRow = uuidv4(); 
-
-            // --- SỬA CÂU QUERY INSERT Ở ĐÂY ---
-            // Chúng ta lưu item.TenLoaiPhong vào cột TenLoaiPhong
+            const maChiTiet = uuidv4();
+            
             await conn.query(
-                `INSERT INTO baocaodoanhthu (MaBaoCao, Thang, Nam, MaLoaiPhong, TenLoaiPhong, DoanhThu, TiLe) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    maBaoCaoRow, 
-                    dbThang, 
-                    nam, 
-                    item.MaLoaiPhong, 
-                    item.TenLoaiPhong, 
-                    item.DoanhThu, 
-                    tile
-                ]
+                `INSERT INTO ct_baocao (MaCTBC, MaBaoCao, MaLoaiPhong, TenLoaiPhong, DoanhThu, TiLe) 
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [maChiTiet, maBaoCao, item.MaLoaiPhong, item.TenLoaiPhong, item.DoanhThu, tile]
             );
         }
 
         await conn.commit();
         res.json({ message: "Lưu báo cáo thành công!" });
-
     } catch (err) {
         await conn.rollback();
-        console.error("Lỗi lưu báo cáo:", err);
-        res.status(500).json({ message: "Lỗi server: " + err.message });
-    } finally {
-        conn.release();
-    }
+        res.status(500).json({ message: err.message });
+    } finally { conn.release(); }
 };
 
-// --- API: XEM BÁO CÁO ĐÃ LƯU ---
-exports.getSavedReport = async (req, res) => {
-    const { thang, nam } = req.query;
-    if (!nam) return res.status(400).json({ message: "Thiếu thông tin năm" });
-
+// --- API: LẤY DANH SÁCH BÁO CÁO ĐÃ LƯU ---
+exports.getSavedReportsList = async (req, res) => {
     try {
-        const dbThang = (thang && thang !== 'ALL') ? thang : null;
-        
-        let sql = "SELECT * FROM baocaodoanhthu WHERE Nam = ?";
-        let params = [nam];
+        // Lấy danh sách các báo cáo (Header), sắp xếp mới nhất lên đầu
+        const [rows] = await db.promise().query("SELECT * FROM baocao ORDER BY NgayTao DESC");
+        res.json(rows);
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
 
-        if (dbThang) {
-            sql += " AND Thang = ?";
-            params.push(dbThang);
-        } else {
-            sql += " AND Thang IS NULL";
+// --- API: XEM CHI TIẾT 1 BÁO CÁO ---
+exports.getReportDetail = async (req, res) => {
+    const { id } = req.params; // id là MaBaoCao
+    try {
+        const [rows] = await db.promise().query("SELECT * FROM ct_baocao WHERE MaBaoCao = ?", [id]);
+        res.json(rows);
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+// --- API: XÓA BÁO CÁO ---
+exports.deleteReport = async (req, res) => {
+    const { id } = req.params;
+    try {
+        // Nhờ ON DELETE CASCADE trong SQL, chỉ cần xóa bảng cha là bảng con tự bay màu
+        await db.promise().query("DELETE FROM baocao WHERE MaBaoCao = ?", [id]);
+        res.json({ message: "Đã xóa báo cáo" });
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+// --- API: LẤY DANH SÁCH BÁO CÁO ---
+exports.getSavedReportsList = async (req, res) => {
+    try {
+        const { thang, nam, type } = req.query; // Thêm tham số 'type'
+        
+        let sql = "SELECT * FROM baocao WHERE 1=1";
+        const params = [];
+
+        if (nam) {
+            sql += " AND Nam = ?";
+            params.push(nam);
         }
+
+        // LOGIC LỌC MỚI:
+        if (type === 'year') {
+            // Nếu xem theo Năm -> Chỉ lấy báo cáo Năm (Thang IS NULL)
+            sql += " AND Thang IS NULL";
+        } else {
+            // Nếu xem theo Tháng -> Lấy báo cáo tháng cụ thể
+            if (thang && thang !== 'ALL') {
+                sql += " AND Thang = ?";
+                params.push(thang);
+            } else {
+                // Nếu chọn "Tất cả tháng" -> Lấy tất cả báo cáo có Thang khác NULL
+                sql += " AND Thang IS NOT NULL";
+            }
+        }
+
+        sql += " ORDER BY NgayTao DESC";
 
         const [rows] = await db.promise().query(sql, params);
-        
-        // Trả về mảng rỗng nếu chưa lưu, hoặc mảng dữ liệu nếu có
         res.json(rows);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Lỗi lấy báo cáo đã lưu" });
-    }
-};
-
-// --- API: XÓA BÁO CÁO ĐÃ LƯU ---
-exports.deleteReport = async (req, res) => {
-    const { thang, nam } = req.query; // Nhận qua Query String
-    if (!nam) return res.status(400).json({ message: "Thiếu thông tin năm" });
-
-    const conn = await db.promise().getConnection();
-    try {
-        const dbThang = (thang && thang !== 'ALL') ? thang : null;
-        
-        let sql = "DELETE FROM baocaodoanhthu WHERE Nam = ?";
-        let params = [nam];
-
-        if (dbThang) {
-            sql += " AND Thang = ?";
-            params.push(dbThang);
-        } else {
-            sql += " AND Thang IS NULL";
-        }
-
-        const [result] = await conn.query(sql, params);
-
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ message: "Không tìm thấy báo cáo để xóa" });
-        }
-
-        res.json({ message: "Đã xóa báo cáo thành công!" });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Lỗi khi xóa báo cáo" });
-    } finally {
-        conn.release();
+    } catch (err) { 
+        res.status(500).json({ message: err.message }); 
     }
 };
