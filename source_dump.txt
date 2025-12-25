@@ -212,21 +212,16 @@ module.exports = pool;
 const db = require("../config/db");
 const { v4: uuidv4 } = require("uuid");
 
-// Hàm tính toán (Giữ nguyên, nhưng chú ý nó đã trả về TenLoaiPhong rồi)
+// 1. Tính toán doanh thu 
 const calculateRevenue = async (thang, nam) => {
     let whereClause = "YEAR(hd.NgayLap) = ?";
     let params = [nam];
-
     if (thang && thang !== 'ALL') {
         whereClause += " AND MONTH(hd.NgayLap) = ?";
         params.push(thang);
     }
-
     const sql = `
-      SELECT 
-        lp.MaLoaiPhong,
-        lp.TenLoaiPhong, -- Chúng ta sẽ lấy cái này để lưu snapshot
-        COALESCE(SUM(thuc_te.ThanhTien), 0) as DoanhThu
+      SELECT lp.MaLoaiPhong, lp.TenLoaiPhong, COALESCE(SUM(thuc_te.ThanhTien), 0) as DoanhThu
       FROM loaiphong lp
       LEFT JOIN (
           SELECT p.MaLoaiPhong, ct.ThanhTien
@@ -241,137 +236,120 @@ const calculateRevenue = async (thang, nam) => {
     return rows;
 };
 
+// API: Lấy dữ liệu Live để preview
 exports.getDoanhThuThang = async (req, res) => {
   const { thang, nam } = req.query;
-  if (!nam) return res.status(400).json({ message: "Vui lòng chọn năm" });
   try {
     const rows = await calculateRevenue(thang, nam);
     res.json(rows);
-  } catch (err) {
-    res.status(500).json({ message: "Lỗi tính toán doanh thu" });
-  }
+  } catch (err) { res.status(500).json({ message: err.message }); }
 };
 
-// --- CẬP NHẬT HÀM LƯU BÁO CÁO (SNAPSHOT) ---
+// --- API: LƯU BÁO CÁO  ---
 exports.saveReport = async (req, res) => {
     const { thang, nam } = req.body;
-    if (!nam) return res.status(400).json({ message: "Thiếu thông tin năm" });
-
     const conn = await db.promise().getConnection();
+    
     try {
         await conn.beginTransaction();
 
-        // 1. Xác định tháng (NULL nếu là báo cáo năm)
+        // 1. Tạo Header Báo Cáo
+        const maBaoCao = uuidv4();
         const dbThang = (thang && thang !== 'ALL') ? thang : null;
+        const tenBaoCao = dbThang 
+            ? `Báo cáo doanh thu Tháng ${dbThang}/${nam}` 
+            : `Báo cáo doanh thu Năm ${nam}`;
 
-        // 2. Xóa báo cáo cũ của kỳ này (để lưu đè cái mới)
-        let deleteSql = "DELETE FROM baocaodoanhthu WHERE Nam = ?";
-        let deleteParams = [nam];
-        if (dbThang) {
-            deleteSql += " AND Thang = ?";
-            deleteParams.push(dbThang);
-        } else {
-            deleteSql += " AND Thang IS NULL";
-        }
-        await conn.query(deleteSql, deleteParams);
+        await conn.query(
+            "INSERT INTO baocao (MaBaoCao, TenBaoCao, Thang, Nam) VALUES (?, ?, ?, ?)",
+            [maBaoCao, tenBaoCao, dbThang, nam]
+        );
 
-        // 3. Tính toán dữ liệu
+        // 2. Tính toán & Lưu Chi Tiết
         const data = await calculateRevenue(thang, nam);
         const totalRevenue = data.reduce((sum, item) => sum + Number(item.DoanhThu), 0);
 
-        // 4. Insert Snapshot (Lưu cả Tên Loại Phòng)
         for (const item of data) {
             const tile = totalRevenue > 0 ? (item.DoanhThu / totalRevenue) : 0;
-            const maBaoCaoRow = uuidv4(); 
-
-            // --- SỬA CÂU QUERY INSERT Ở ĐÂY ---
-            // Chúng ta lưu item.TenLoaiPhong vào cột TenLoaiPhong
+            const maChiTiet = uuidv4();
+            
             await conn.query(
-                `INSERT INTO baocaodoanhthu (MaBaoCao, Thang, Nam, MaLoaiPhong, TenLoaiPhong, DoanhThu, TiLe) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    maBaoCaoRow, 
-                    dbThang, 
-                    nam, 
-                    item.MaLoaiPhong, 
-                    item.TenLoaiPhong, 
-                    item.DoanhThu, 
-                    tile
-                ]
+                `INSERT INTO ct_baocao (MaCTBC, MaBaoCao, MaLoaiPhong, TenLoaiPhong, DoanhThu, TiLe) 
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [maChiTiet, maBaoCao, item.MaLoaiPhong, item.TenLoaiPhong, item.DoanhThu, tile]
             );
         }
 
         await conn.commit();
         res.json({ message: "Lưu báo cáo thành công!" });
-
     } catch (err) {
         await conn.rollback();
-        console.error("Lỗi lưu báo cáo:", err);
-        res.status(500).json({ message: "Lỗi server: " + err.message });
-    } finally {
-        conn.release();
-    }
+        res.status(500).json({ message: err.message });
+    } finally { conn.release(); }
 };
 
-// --- API: XEM BÁO CÁO ĐÃ LƯU ---
-exports.getSavedReport = async (req, res) => {
-    const { thang, nam } = req.query;
-    if (!nam) return res.status(400).json({ message: "Thiếu thông tin năm" });
-
+// --- API: LẤY DANH SÁCH BÁO CÁO ĐÃ LƯU ---
+exports.getSavedReportsList = async (req, res) => {
     try {
-        const dbThang = (thang && thang !== 'ALL') ? thang : null;
-        
-        let sql = "SELECT * FROM baocaodoanhthu WHERE Nam = ?";
-        let params = [nam];
+        // Lấy danh sách các báo cáo (Header), sắp xếp mới nhất lên đầu
+        const [rows] = await db.promise().query("SELECT * FROM baocao ORDER BY NgayTao DESC");
+        res.json(rows);
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
 
-        if (dbThang) {
-            sql += " AND Thang = ?";
-            params.push(dbThang);
-        } else {
-            sql += " AND Thang IS NULL";
+// --- API: XEM CHI TIẾT 1 BÁO CÁO ---
+exports.getReportDetail = async (req, res) => {
+    const { id } = req.params; // id là MaBaoCao
+    try {
+        const [rows] = await db.promise().query("SELECT * FROM ct_baocao WHERE MaBaoCao = ?", [id]);
+        res.json(rows);
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+// --- API: XÓA BÁO CÁO ---
+exports.deleteReport = async (req, res) => {
+    const { id } = req.params;
+    try {
+        // Nhờ ON DELETE CASCADE trong SQL, chỉ cần xóa bảng cha là bảng con tự bay màu
+        await db.promise().query("DELETE FROM baocao WHERE MaBaoCao = ?", [id]);
+        res.json({ message: "Đã xóa báo cáo" });
+    } catch (err) { res.status(500).json({ message: err.message }); }
+};
+
+// --- API: LẤY DANH SÁCH BÁO CÁO ---
+exports.getSavedReportsList = async (req, res) => {
+    try {
+        const { thang, nam, type } = req.query; // Thêm tham số 'type'
+        
+        let sql = "SELECT * FROM baocao WHERE 1=1";
+        const params = [];
+
+        if (nam) {
+            sql += " AND Nam = ?";
+            params.push(nam);
         }
+
+        // LOGIC LỌC MỚI:
+        if (type === 'year') {
+            // Nếu xem theo Năm -> Chỉ lấy báo cáo Năm (Thang IS NULL)
+            sql += " AND Thang IS NULL";
+        } else {
+            // Nếu xem theo Tháng -> Lấy báo cáo tháng cụ thể
+            if (thang && thang !== 'ALL') {
+                sql += " AND Thang = ?";
+                params.push(thang);
+            } else {
+                // Nếu chọn "Tất cả tháng" -> Lấy tất cả báo cáo có Thang khác NULL
+                sql += " AND Thang IS NOT NULL";
+            }
+        }
+
+        sql += " ORDER BY NgayTao DESC";
 
         const [rows] = await db.promise().query(sql, params);
-        
-        // Trả về mảng rỗng nếu chưa lưu, hoặc mảng dữ liệu nếu có
         res.json(rows);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Lỗi lấy báo cáo đã lưu" });
-    }
-};
-
-// --- API: XÓA BÁO CÁO ĐÃ LƯU ---
-exports.deleteReport = async (req, res) => {
-    const { thang, nam } = req.query; // Nhận qua Query String
-    if (!nam) return res.status(400).json({ message: "Thiếu thông tin năm" });
-
-    const conn = await db.promise().getConnection();
-    try {
-        const dbThang = (thang && thang !== 'ALL') ? thang : null;
-        
-        let sql = "DELETE FROM baocaodoanhthu WHERE Nam = ?";
-        let params = [nam];
-
-        if (dbThang) {
-            sql += " AND Thang = ?";
-            params.push(dbThang);
-        } else {
-            sql += " AND Thang IS NULL";
-        }
-
-        const [result] = await conn.query(sql, params);
-
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ message: "Không tìm thấy báo cáo để xóa" });
-        }
-
-        res.json({ message: "Đã xóa báo cáo thành công!" });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Lỗi khi xóa báo cáo" });
-    } finally {
-        conn.release();
+    } catch (err) { 
+        res.status(500).json({ message: err.message }); 
     }
 };
 ```
@@ -1594,17 +1572,20 @@ const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/baocaoController");
 
-// Báo cáo doanh thu theo tháng
-router.get("/doanhthu", controller.getDoanhThuThang);
+// API: Lấy dữ liệu Live để preview
+router.get("/doanhthu", controller.getDoanhThuThang); 
 
-// Lưu báo cáo doanh thu
-router.post("/save", controller.saveReport);
+// --- API: LƯU BÁO CÁO  ---
+router.post("/save", controller.saveReport);          
 
-// Lấy các báo cáo đã lưu
-router.get("/saved", controller.getSavedReport);
+// --- API: LẤY DANH SÁCH BÁO CÁO ĐÃ LƯU ---
+router.get("/list", controller.getSavedReportsList);  
 
-// Xóa báo cáo đã lưu
-router.delete("/delete", controller.deleteReport);
+// --- API: XEM CHI TIẾT 1 BÁO CÁO ---
+router.get("/detail/:id", controller.getReportDetail);
+
+// --- API: XÓA BÁO CÁO ---
+router.delete("/:id", controller.deleteReport);
 
 module.exports = router;
 ```
@@ -4476,415 +4457,455 @@ export default Login;
 
 ### frontend\src\pages\ReportManagement.jsx
 ```jsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import api from "../services/api";
 
 const ReportManagement = () => {
-  const [reportType, setReportType] = useState("month"); // 'month' hoặc 'year'
+  const [activeTab, setActiveTab] = useState("create"); // 'create' | 'saved'
+  
+  // --- STATE TAB 1: LẬP BÁO CÁO (CREATE) ---
+  const [reportType, setReportType] = useState("month");
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
+  const [liveData, setLiveData] = useState(null);
+  const [liveTotal, setLiveTotal] = useState(0);
+
+  // --- STATE TAB 2: QUẢN LÝ ĐÃ LƯU (SAVED) ---
+  const [savedReports, setSavedReports] = useState([]); 
+  const [selectedReport, setSelectedReport] = useState(null); 
+  const [detailData, setDetailData] = useState(null); 
+  const [detailTotal, setDetailTotal] = useState(0);
   
-  const [reportData, setReportData] = useState(null);
+  // --- BỘ LỌC CHO DANH SÁCH LỊCH SỬ ---
+  const [filterType, setFilterType] = useState('month'); // 'month' | 'year'
+  const [filterSavedMonth, setFilterSavedMonth] = useState('ALL'); 
+  const [filterSavedYear, setFilterSavedYear] = useState(new Date().getFullYear());
+
   const [loading, setLoading] = useState(false);
-  const [totalRevenue, setTotalRevenue] = useState(0);
-  const [isViewSaved, setIsViewSaved] = useState(false);
-  const [savedCreatedAt, setSavedCreatedAt] = useState(null);
 
-  const handleCreateReport = async () => {
-    setLoading(true);
-    try {
-      let url = `/baocao/doanhthu?nam=${year}`;
-      if (reportType === 'month') {
-          url += `&thang=${month}`;
-      }
+  // --- HELPER: HIỂN THỊ THỜI GIAN THÔNG MINH ---
+  const renderTimeText = (rptMonth, rptYear) => {
+      // Nếu là báo cáo năm (rptMonth là null, undefined hoặc 'ALL')
+      if (!rptMonth || rptMonth === 'ALL') return `(Số liệu cả năm tài chính ${rptYear})`;
 
-      const res = await api.get(url);
-      const data = res.data;
-      const total = data.reduce((sum, item) => sum + Number(item.DoanhThu), 0);
-      
-      setTotalRevenue(total);
-      setReportData(data);
-      
-      // Reset trạng thái về chế độ xem Live
-      setIsViewSaved(false);
-      setSavedCreatedAt(null); 
-
-    } catch (err) {
-      alert("Lỗi lập báo cáo: " + err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // --- LƯU DB ---
-  const handleSaveToDB = async () => {
-    if (!reportData || reportData.length === 0) {
-        alert("⚠️ Chưa có dữ liệu để lưu!");
-        return;
-    }
-    if (!window.confirm("Bạn có chắc muốn lưu báo cáo này vào hệ thống?")) return;
-
-    setLoading(true);
-    try {
-        // Gửi request lưu
-        await api.post("/baocao/save", {
-            thang: reportType === 'month' ? month : 'ALL',
-            nam: year
-        });
-        alert("✅ Lưu báo cáo thành công!");
-    } catch (err) {
-        alert("❌ Lỗi: " + (err.response?.data?.message || "Không thể lưu báo cáo"));
-    } finally {
-        setLoading(false);
-    }
-  };
-
-  const handleDeleteReport = async () => {
-      const confirmMsg = `⚠️ CẢNH BÁO: Bạn có chắc muốn xóa vĩnh viễn báo cáo ${reportType === 'month' ? `Tháng ${month}` : 'Năm'} ${year}?\nHành động này không thể hoàn tác!`;
-      if (!window.confirm(confirmMsg)) return;
-
-      setLoading(true);
-      try {
-          let url = `/baocao/delete?nam=${year}`;
-          if (reportType === 'month') url += `&thang=${month}`;
-
-          await api.delete(url);
-          
-          alert("✅ Đã xóa báo cáo!");
-          
-          // Sau khi xóa xong, reset về màn hình trắng hoặc tự động load lại bản tạm tính
-          setReportData(null);
-          setTotalRevenue(0);
-          setIsViewSaved(false); // Thoát chế độ xem đã lưu
-          setSavedCreatedAt(null);
-
-      } catch (err) {
-          alert("❌ Lỗi: " + (err.response?.data?.message || err.message));
-      } finally {
-          setLoading(false);
-      }
-  };
-
-  // --- XEM BÁO CÁO ĐÃ LƯU ---
-  const handleViewSaved = async () => {
-    setLoading(true);
-    try {
-        let url = `/baocao/saved?nam=${year}`;
-        if (reportType === 'month') {
-            url += `&thang=${month}`;
-        }
-
-        const res = await api.get(url);
-        const data = res.data;
-
-        if (data.length === 0) {
-            alert(`⚠️ Chưa có báo cáo nào được lưu cho ${reportType === 'month' ? `tháng ${month}` : 'năm'} ${year}.`);
-            setReportData(null);
-            setTotalRevenue(0);
-            setSavedCreatedAt(null); // Reset nếu không có dữ liệu
-        } else {
-            const total = data.reduce((sum, item) => sum + Number(item.DoanhThu), 0);
-            setTotalRevenue(total);
-            setReportData(data);
-            setIsViewSaved(true);
-
-            // --- BỔ SUNG ĐOẠN NÀY ĐỂ LẤY NGÀY LƯU ---
-            if (data.length > 0) {
-                setSavedCreatedAt(data[0].NgayTao); 
-            }
-            // ----------------------------------------
-
-            alert("✅ Đã tải dữ liệu từ báo cáo đã lưu.");
-        }
-    } catch (err) {
-        alert("❌ Lỗi: " + err.message);
-    } finally {
-        setLoading(false);
-    }
-  };
-
-  // ✅ HÀM TÍNH TOÁN DÒNG CHỮ NGÀY THÁNG (MỚI)
-  const renderTimeText = () => {
       const today = new Date();
       const currentMonth = today.getMonth() + 1;
       const currentYear = today.getFullYear();
-      const currentDay = today.getDate();
+      
+      const m = Number(rptMonth);
+      const y = Number(rptYear);
+      const fmt = (d) => String(d).padStart(2, '0');
 
-      // Format ngày dd/mm/yyyy
-      const fmt = (d, m, y) => `${String(d).padStart(2,'0')}/${String(m).padStart(2,'0')}/${y}`;
-
-      // 1. Trường hợp theo THÁNG
-      if (reportType === 'month') {
-          // Nếu chọn tháng hiện tại của năm hiện tại
-          if (Number(year) === currentYear && Number(month) === currentMonth) {
-              return `(Tính đến ngày: ${fmt(currentDay, currentMonth, currentYear)})`;
-          } 
-          // Nếu chọn tháng trong quá khứ (hoặc tương lai)
-          else {
-              // Lấy ngày cuối cùng của tháng đó (mẹo: ngày 0 của tháng kế tiếp)
-              const lastDay = new Date(year, month, 0).getDate(); 
-              return `(Từ ngày 01/${month}/${year} đến ngày ${lastDay}/${month}/${year})`;
-          }
+      // Nếu xem tháng hiện tại của năm hiện tại -> Tính đến ngày hôm nay
+      if (m === currentMonth && y === currentYear) {
+          const currentDay = today.getDate();
+          return `(Số liệu tính đến ngày: ${fmt(currentDay)}/${fmt(m)}/${y})`;
       } 
-      // 2. Trường hợp theo NĂM
-      else {
-          if (Number(year) === currentYear) {
-              return `(Tính đến ngày: ${fmt(currentDay, currentMonth, currentYear)})`;
-          } else {
-              return `(Năm tài chính ${year})`;
-          }
-      }
+      
+      // Nếu xem tháng cũ/tương lai -> Tính full tháng
+      const lastDay = new Date(y, m, 0).getDate();
+      return `(Từ ngày 01/${fmt(m)}/${y} đến ngày ${lastDay}/${fmt(m)}/${y})`;
   };
 
-  const handlePrint = () => {
-      const printContent = document.getElementById("report-print-section");
-      const windowUrl = 'about:blank';
-      const windowName = 'Print' + new Date().getTime();
-      const printWindow = window.open(windowUrl, windowName, 'left=50000,top=50000,width=0,height=0');
+  // --- CHỨC NĂNG IN ẤN ---
+  const handlePrint = (title, timeText, data, total) => {
+      const printWindow = window.open('', '', 'height=600,width=800');
+      
+      const htmlContent = `
+        <html>
+          <head>
+            <title>In Báo Cáo</title>
+            <style>
+              body { font-family: 'Times New Roman', serif; padding: 20px; }
+              .header { text-align: center; margin-bottom: 30px; }
+              .header h1 { margin: 0; text-transform: uppercase; font-size: 24px; }
+              .header p { margin: 5px 0; font-style: italic; color: #555; }
+              table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+              th, td { border: 1px solid #000; padding: 10px; text-align: center; font-size: 14px; }
+              th { background-color: #f0f0f0; font-weight: bold; }
+              .text-right { text-align: right; padding-right: 15px; }
+              .text-left { text-align: left; padding-left: 15px; }
+              .total-row { font-weight: bold; font-size: 16px; background-color: #fafafa; }
+              .footer { margin-top: 50px; display: flex; justify-content: space-between; text-align: center; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <h1>${title}</h1>
+              <p>${timeText}</p>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 10%">STT</th>
+                  <th style="width: 40%">Loại Phòng</th>
+                  <th style="width: 30%">Doanh Thu</th>
+                  <th style="width: 20%">Tỷ Lệ</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.map((item, index) => {
+                    const percent = total > 0 ? ((item.DoanhThu / total) * 100).toFixed(2) : 0;
+                    return `
+                      <tr>
+                        <td>${index + 1}</td>
+                        <td class="text-left">${item.TenLoaiPhong || item.MaLoaiPhong}</td>
+                        <td class="text-right">${Number(item.DoanhThu).toLocaleString('vi-VN')} đ</td>
+                        <td>${percent}%</td>
+                      </tr>
+                    `;
+                }).join('')}
+                <tr class="total-row">
+                  <td colspan="2">TỔNG CỘNG</td>
+                  <td class="text-right">${total.toLocaleString('vi-VN')} đ</td>
+                  <td>100%</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="footer">
+               <div style="width: 40%">
+                  <p>Người lập biểu</p>
+                  <p style="margin-top: 60px; font-style: italic;">(Ký và ghi rõ họ tên)</p>
+               </div>
+               <div style="width: 40%">
+                  <p>Ngày ...... tháng ...... năm ......</p>
+                  <p>Giám đốc</p>
+                  <p style="margin-top: 60px; font-style: italic;">(Ký và đóng dấu)</p>
+               </div>
+            </div>
+          </body>
+        </html>
+      `;
 
-      printWindow.document.write(`
-          <html>
-              <head>
-                  <title>Báo Cáo Doanh Thu</title>
-                  <style>
-                      body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
-                      table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-                      th, td { border: 1px solid #000; padding: 10px; text-align: left; }
-                      th { background-color: #f0f0f0; }
-                      .text-right { text-align: right; }
-                      .total-row { font-weight: bold; font-size: 1.1em; }
-                      h1 { text-transform: uppercase; margin-bottom: 5px; }
-                      .subtitle { font-style: italic; font-size: 14px; margin-bottom: 20px; }
-                  </style>
-              </head>
-              <body>
-                  <h1>Báo Cáo Doanh Thu</h1>
-                  <p class="subtitle">
-                    ${reportType === 'month' ? `Tháng ${month}` : 'Năm'} / ${year} <br/>
-                    ${renderTimeText()}
-                  </p>
-                  ${printContent.innerHTML}
-              </body>
-          </html>
-      `);
+      printWindow.document.write(htmlContent);
       printWindow.document.close();
       printWindow.focus();
       setTimeout(() => {
           printWindow.print();
           printWindow.close();
-      }, 250);
+      }, 500);
   };
+
+  // --- API HANDLERS (TAB 1: CREATE) ---
+  const handlePreview = async () => {
+    setLoading(true);
+    try {
+      let url = `/baocao/doanhthu?nam=${year}`;
+      if (reportType === 'month') url += `&thang=${month}`;
+      
+      const res = await api.get(url);
+      setLiveTotal(res.data.reduce((sum, item) => sum + Number(item.DoanhThu), 0));
+      setLiveData(res.data);
+    } catch (err) { alert("Lỗi: " + err.message); } 
+    finally { setLoading(false); }
+  };
+
+  const handleSave = async () => {
+    if (!liveData) return;
+    if (!window.confirm("Lưu báo cáo này lại?")) return;
+    try {
+        await api.post("/baocao/save", { thang: reportType === 'month' ? month : 'ALL', nam: year });
+        alert("✅ Lưu thành công!");
+        setLiveData(null); 
+        fetchSavedReports(); 
+    } catch (err) { alert("Lỗi lưu: " + err.message); }
+  };
+
+  // --- API HANDLERS (TAB 2: SAVED HISTORY) ---
+  const fetchSavedReports = async () => {
+      try {
+          // Logic lọc: Nếu filterType là 'year' thì gửi type=year để backend chỉ lấy báo cáo năm
+          let url = `/baocao/list?nam=${filterSavedYear}`;
+          
+          if (filterType === 'year') {
+              url += `&type=year`;
+          } else {
+              url += `&type=month`;
+              if (filterSavedMonth !== 'ALL') {
+                  url += `&thang=${filterSavedMonth}`;
+              }
+          }
+          
+          const res = await api.get(url);
+          setSavedReports(res.data);
+      } catch (err) { console.error(err); }
+  };
+
+  // Tự động tải lại khi đổi Tab hoặc đổi bộ lọc
+  useEffect(() => {
+      if (activeTab === 'saved') fetchSavedReports();
+  }, [activeTab, filterType, filterSavedMonth, filterSavedYear]);
+
+  const handleViewDetail = async (report) => {
+      setLoading(true);
+      try {
+          const res = await api.get(`/baocao/detail/${report.MaBaoCao}`);
+          setDetailData(res.data);
+          setDetailTotal(res.data.reduce((sum, item) => sum + Number(item.DoanhThu), 0));
+          setSelectedReport(report);
+      } catch (err) { alert("Lỗi tải chi tiết"); }
+      finally { setLoading(false); }
+  };
+
+  const handleDelete = async (id) => {
+      if (!window.confirm("Bạn chắc chắn muốn xóa vĩnh viễn báo cáo này?")) return;
+      try {
+          await api.delete(`/baocao/${id}`);
+          alert("✅ Đã xóa!");
+          fetchSavedReports();
+          // Nếu đang xem báo cáo bị xóa thì clear màn hình chi tiết
+          if (selectedReport?.MaBaoCao === id) { setSelectedReport(null); setDetailData(null); }
+      } catch (err) { alert("Lỗi xóa: " + err.message); }
+  };
+
+  // --- RENDER BẢNG DỮ LIỆU ---
+  const renderTable = (data, total) => (
+    <div style={styles.tableCard}>
+        <table style={styles.table}>
+            <thead>
+                <tr style={styles.tableHeader}>
+                    <th style={styles.th}>STT</th>
+                    <th style={styles.th}>Loại Phòng</th>
+                    <th style={{...styles.th, textAlign: 'right'}}>Doanh Thu</th>
+                    <th style={{...styles.th, textAlign: 'right'}}>Tỷ Lệ</th>
+                </tr>
+            </thead>
+            <tbody>
+                {data.map((item, index) => {
+                    const percent = total > 0 ? ((item.DoanhThu / total) * 100).toFixed(2) : 0;
+                    return (
+                        <tr key={index} style={{borderBottom: '1px solid #f1f5f9'}}>
+                            <td style={styles.td}>{index + 1}</td>
+                            <td style={{...styles.td, fontWeight: '600'}}>{item.TenLoaiPhong || item.MaLoaiPhong}</td>
+                            <td style={{...styles.td, textAlign: 'right', color: '#2563eb', fontWeight: 'bold'}}>
+                                {Number(item.DoanhThu).toLocaleString()} đ
+                            </td>
+                            <td style={{...styles.td, textAlign: 'right'}}>{percent}%</td>
+                        </tr>
+                    );
+                })}
+                <tr style={{background: '#f8fafc', borderTop: '2px solid #334155'}}>
+                    <td colSpan={2} style={{padding: '15px', fontWeight: 'bold'}}>TỔNG CỘNG</td>
+                    <td style={{padding: '15px', textAlign: 'right', fontWeight: 'bold', color: '#dc2626', fontSize: '18px'}}>
+                        {total.toLocaleString()} đ
+                    </td>
+                    <td style={{padding: '15px', textAlign: 'right', fontWeight: 'bold'}}>100%</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+  );
 
   return (
     <div style={styles.wrapper}>
-      <div style={styles.header}>
-        <h1 style={styles.title}>📈 Báo cáo doanh thu</h1>
-        <p style={styles.subtitle}>Xem doanh thu theo tháng/năm và tỷ lệ từng loại phòng</p>
+      <h1 style={styles.title}>📈 Báo cáo doanh thu</h1>
+      
+      {/* TABS */}
+      <div style={styles.tabContainer}>
+          <button style={activeTab === 'create' ? styles.tabActive : styles.tab} onClick={() => setActiveTab('create')}>📝 Lập báo cáo mới</button>
+          <button style={activeTab === 'saved' ? styles.tabActive : styles.tab} onClick={() => setActiveTab('saved')}>📂 Danh sách đã lưu</button>
       </div>
 
-      <div style={styles.filterCard}>
-        <div style={{marginBottom: '15px', display: 'flex', gap: '20px'}}>
-            <label style={{cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px'}}>
-                <input type="radio" name="rptType" checked={reportType === 'month'} onChange={() => setReportType('month')}/> 
-                Theo Tháng
-            </label>
-            <label style={{cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px'}}>
-                <input type="radio" name="rptType" checked={reportType === 'year'} onChange={() => setReportType('year')}/> 
-                Theo Năm
-            </label>
-        </div>
+      {/* --- CONTENT TAB 1: LẬP BÁO CÁO --- */}
+      {activeTab === 'create' && (
+          <div style={{animation: 'fadeIn 0.3s'}}>
+              <div style={styles.filterCard}>
+                  <div style={{display: 'flex', gap: '20px', marginBottom: '15px'}}>
+                      <label style={styles.radioLabel}><input type="radio" checked={reportType === 'month'} onChange={() => setReportType('month')}/> Theo Tháng</label>
+                      <label style={styles.radioLabel}><input type="radio" checked={reportType === 'year'} onChange={() => setReportType('year')}/> Theo Năm</label>
+                  </div>
+                  <div style={styles.filterRow}>
+                      {reportType === 'month' && (
+                          <select value={month} onChange={(e) => setMonth(e.target.value)} style={styles.select}>
+                              {Array.from({length: 12}, (_, i) => i + 1).map(m => <option key={m} value={m}>Tháng {m}</option>)}
+                          </select>
+                      )}
+                      <input type="number" value={year} onChange={(e) => setYear(e.target.value)} style={styles.input} placeholder="Năm"/>
+                      <button onClick={handlePreview} style={styles.btnPrimary} disabled={loading}>{loading ? "..." : "Xem trước"}</button>
+                  </div>
+              </div>
 
-        <div style={styles.filterRow}>
-            {reportType === 'month' && (
-                <div style={styles.formGroup}>
-                    <label style={styles.label}>Tháng:</label>
-                    <select value={month} onChange={(e) => setMonth(e.target.value)} style={styles.select}>
-                        {Array.from({length: 12}, (_, i) => i + 1).map(m => (
-                            <option key={m} value={m}>Tháng {m}</option>
-                        ))}
-                    </select>
-                </div>
-            )}
+              {liveData && (
+                  <div>
+                      <div style={styles.resultHeader}>
+                          <div>
+                              <h3 style={{margin: 0, color: '#1e293b'}}>KẾT QUẢ TẠM TÍNH</h3>
+                              <p style={styles.timeText}>
+                                  {renderTimeText(reportType === 'month' ? month : 'ALL', year)}
+                              </p>
+                          </div>
+                          <div style={{display: 'flex', gap: '10px'}}>
+                              <button 
+                                onClick={() => handlePrint(`Báo cáo doanh thu (Tạm tính)`, renderTimeText(reportType === 'month' ? month : 'ALL', year), liveData, liveTotal)} 
+                                style={styles.btnPrint}
+                              >
+                                  🖨️ In Báo Cáo
+                              </button>
+                              <button onClick={handleSave} style={styles.btnSuccess}>💾 Lưu vào hệ thống</button>
+                          </div>
+                      </div>
+                      {renderTable(liveData, liveTotal)}
+                  </div>
+              )}
+          </div>
+      )}
 
-            <div style={styles.formGroup}>
-                <label style={styles.label}>Năm:</label>
-                <input type="number" value={year} onChange={(e) => setYear(e.target.value)} style={styles.input}/>
-            </div>
+      {/* --- CONTENT TAB 2: DANH SÁCH ĐÃ LƯU --- */}
+      {activeTab === 'saved' && (
+          <div style={{display: 'flex', gap: '20px', animation: 'fadeIn 0.3s'}}>
+              
+              {/* SIDEBAR: BỘ LỌC + DANH SÁCH */}
+              <div style={{width: '350px', background: 'white', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)', maxHeight: '80vh', display: 'flex', flexDirection: 'column'}}>
+                  <div style={{padding: '15px', borderBottom: '1px solid #e2e8f0'}}>
+                      <div style={{fontWeight: 'bold', color: '#334155', marginBottom: '10px'}}>Lịch sử báo cáo</div>
+                      
+                      {/* Chọn loại lọc */}
+                      <div style={{display: 'flex', gap: '15px', marginBottom: '10px', fontSize: '13px'}}>
+                          <label style={{cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px'}}>
+                              <input type="radio" checked={filterType === 'month'} onChange={() => setFilterType('month')}/> Theo Tháng
+                          </label>
+                          <label style={{cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px'}}>
+                              <input type="radio" checked={filterType === 'year'} onChange={() => setFilterType('year')}/> Theo Năm
+                          </label>
+                      </div>
 
-            <div style={{display: 'flex', gap: '10px'}}>
-                {/* Nút Lập Báo Cáo (Tính toán lại từ đầu) */}
-                <button 
-                    onClick={() => {
-                        setIsViewSaved(false); // Reset về chế độ Live
-                        handleCreateReport();
-                    }} 
-                    style={styles.reportBtn} 
-                    disabled={loading}
-                >
-                    {loading ? "⏳..." : "⚡ Lập báo cáo mới"}
-                </button>
+                      {/* Input lọc */}
+                      <div style={{display: 'flex', gap: '8px'}}>
+                          {filterType === 'month' && (
+                              <select 
+                                value={filterSavedMonth} 
+                                onChange={(e) => setFilterSavedMonth(e.target.value)}
+                                style={{...styles.selectSmall, flex: 1}}
+                              >
+                                  <option value="ALL">Tất cả tháng</option>
+                                  {Array.from({length: 12}, (_, i) => i + 1).map(m => (
+                                      <option key={m} value={m}>Tháng {m}</option>
+                                  ))}
+                              </select>
+                          )}
+                          <input 
+                            type="number" 
+                            value={filterSavedYear} 
+                            onChange={(e) => setFilterSavedYear(e.target.value)}
+                            placeholder="Năm"
+                            style={{...styles.inputSmall, flex: filterType === 'year' ? 1 : 'unset', width: filterType === 'year' ? '100%' : '80px'}}
+                          />
+                      </div>
+                  </div>
 
-                {/* --- NÚT MỚI: XEM ĐÃ LƯU --- */}
-                <button 
-                    onClick={handleViewSaved} 
-                    style={styles.viewSavedBtn} 
-                    disabled={loading}
-                    title="Xem lại báo cáo đã lưu trong Database"
-                >
-                    📂 Xem đã lưu
-                </button>
-            </div>
-        </div>
-      </div>
+                  {/* Danh sách cuộn */}
+                  <div style={{overflowY: 'auto', flex: 1}}>
+                      {savedReports.length === 0 ? (
+                          <div style={{padding: '30px', textAlign: 'center', color: '#94a3b8', fontSize: '13px'}}>
+                              Không tìm thấy báo cáo nào.
+                          </div>
+                      ) : (
+                          savedReports.map(rpt => (
+                              <div 
+                                key={rpt.MaBaoCao} 
+                                onClick={() => handleViewDetail(rpt)}
+                                style={{
+                                    padding: '15px', 
+                                    borderBottom: '1px solid #f1f5f9', 
+                                    cursor: 'pointer',
+                                    background: selectedReport?.MaBaoCao === rpt.MaBaoCao ? '#eff6ff' : 'white',
+                                    transition: '0.2s'
+                                }}
+                              >
+                                  {/* Tên báo cáo */}
+                                  <div style={{fontWeight: '600', color: '#1e293b', marginBottom: '6px', fontSize: '14px'}}>
+                                      {rpt.TenBaoCao}
+                                  </div>
 
-      {reportData && (
-        <div style={styles.resultSection}>
-            <div style={styles.reportHeader}>
-                <div>
-                    <h3 style={{margin: 0, color: '#1e293b', textTransform: 'uppercase'}}>
-                        {/* Thêm label để biết đang xem loại nào */}
-                        {isViewSaved ? "(BẢN ĐÃ LƯU) " : "(BẢN TẠM TÍNH) "} 
-                        KẾT QUẢ: {reportType === 'month' ? `THÁNG ${month}` : 'CẢ NĂM'} / {year}
-                    </h3>
-                    <span style={{fontSize: '14px', color: '#64748b', fontStyle: 'italic', marginTop: '5px', display: 'block'}}>
-                        {renderTimeText()}
-                    </span>
-                </div>
-                
-                <div style={{display: 'flex', gap: '10px'}}>
-                    {/* Chỉ hiện nút Lưu nếu đang xem bản Tạm tính (Live) */}
-                    {!isViewSaved && (
-                        <button style={styles.saveBtn} onClick={handleSaveToDB}>
-                            💾 Lưu Báo Cáo
-                        </button>
-                    )}
+                                  {/* Thời gian + Nút xóa */}
+                                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                      <div style={{display: 'flex', flexDirection: 'column'}}>
+                                          <span style={{fontSize: '12px', color: '#64748b', fontWeight: '500'}}>
+                                              📅 {new Date(rpt.NgayTao).toLocaleDateString('vi-VN')}
+                                          </span>
+                                          <span style={{fontSize: '11px', color: '#94a3b8', fontStyle: 'italic', marginTop: '2px'}}>
+                                              ⏰ Lập lúc: {new Date(rpt.NgayTao).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
+                                          </span>
+                                      </div>
 
-                    {/* 2. Nếu đang xem Saved -> Hiện nút Xóa */}
-                    {isViewSaved && (
-                        <button style={styles.deleteBtn} onClick={handleDeleteReport} disabled={loading}>
-                            🗑️ Xóa Báo Cáo
-                        </button>
-                    )}
-                    
-                    <button style={styles.printBtn} onClick={handlePrint}>🖨️ In Báo Cáo</button>
-                </div>
-            </div>
+                                      <span 
+                                        onClick={(e) => { e.stopPropagation(); handleDelete(rpt.MaBaoCao); }}
+                                        style={styles.deleteIcon}
+                                        title="Xóa báo cáo này"
+                                      >
+                                          ✕ Xóa
+                                      </span>
+                                  </div>
+                              </div>
+                          ))
+                      )}
+                  </div>
+              </div>
 
-            <div style={styles.tableCard} id="report-print-section">
-                <table style={styles.table}>
-                    <thead>
-                        <tr style={styles.tableHeader}>
-                            <th style={styles.th}>STT</th>
-                            <th style={styles.th}>Loại Phòng</th>
-                            <th style={{...styles.th, textAlign: 'right'}}>Doanh Thu</th>
-                            <th style={{...styles.th, textAlign: 'right'}}>Tỷ Lệ</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {reportData.map((item, index) => {
-                            const percent = totalRevenue > 0 
-                                ? ((item.DoanhThu / totalRevenue) * 100).toFixed(2) 
-                                : 0;
-                            
-                            return (
-                                <tr key={index} style={{...styles.tr, background: index % 2 === 0 ? "#fff" : "#f8fafc"}}>
-                                    <td style={styles.td}>{index + 1}</td>
-                                    <td style={{...styles.td, fontWeight: '600', color: '#334155'}}>
-                                        {item.TenLoaiPhong}
-                                    </td>
-                                    <td style={{...styles.td, textAlign: 'right', color: '#2563eb', fontWeight: 'bold'}}>
-                                        {Number(item.DoanhThu).toLocaleString()} đ
-                                    </td>
-                                    <td style={{...styles.td, textAlign: 'right'}}>
-                                        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px'}}>
-                                            <span>{percent}%</span>
-                                            <div style={{width: '50px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden'}}>
-                                                <div style={{width: `${percent}%`, height: '100%', background: '#10b981'}}></div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                </tr>
-                            );
-                        })}
-                        
-                        <tr style={{borderTop: '2px solid #334155', background: '#f1f5f9'}} className="total-row">
-                            <td colSpan={2} style={{padding: '16px 24px', fontWeight: 'bold', fontSize: '16px'}}>TỔNG CỘNG</td>
-                            <td style={{padding: '16px 24px', textAlign: 'right', fontWeight: 'bold', fontSize: '18px', color: '#dc2626'}}>
-                                {totalRevenue.toLocaleString()} đ
-                            </td>
-                            <td style={{padding: '16px 24px', textAlign: 'right', fontWeight: 'bold'}}>100%</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
+              {/* MAIN: CHI TIẾT BÁO CÁO */}
+              <div style={{flex: 1}}>
+                  {selectedReport && detailData ? (
+                      <div style={{background: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)'}}>
+                          <div style={styles.resultHeader}>
+                              <div>
+                                  <h2 style={{margin: '0 0 5px 0', color: '#1e293b', fontSize: '1.5rem'}}>{selectedReport.TenBaoCao}</h2>
+                                  <p style={styles.timeText}>
+                                      {renderTimeText(selectedReport.Thang, selectedReport.Nam)}
+                                  </p>
+                              </div>
+                              <button 
+                                onClick={() => handlePrint(selectedReport.TenBaoCao, renderTimeText(selectedReport.Thang, selectedReport.Nam), detailData, detailTotal)} 
+                                style={styles.btnPrint}
+                              >
+                                  🖨️ In Báo Cáo
+                              </button>
+                          </div>
+                          {renderTable(detailData, detailTotal)}
+                      </div>
+                  ) : (
+                      <div style={{height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', border: '2px dashed #e2e8f0', borderRadius: '12px'}}>
+                          Chọn một báo cáo bên trái để xem chi tiết
+                      </div>
+                  )}
+              </div>
+          </div>
       )}
     </div>
   );
 };
 
+// --- CSS STYLES ---
 const styles = {
   wrapper: { padding: "2rem 3rem", background: "#F5F8FF", minHeight: "100vh" },
-  header: { marginBottom: "2rem" },
-  title: { fontSize: "2rem", fontWeight: "700", color: "#1F2A40", margin: 0 },
-  subtitle: { color: "#64748b", marginTop: "5px" },
-  filterCard: { background: "white", padding: "20px 30px", borderRadius: "12px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.05)", marginBottom: "30px", border: '1px solid #e2e8f0' },
-  filterRow: { display: "flex", gap: "20px", alignItems: "flex-end" },
-  formGroup: { display: "flex", flexDirection: "column", gap: "8px" },
-  label: { fontSize: "14px", fontWeight: "600", color: "#334155" },
-  select: { padding: "10px 15px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "15px", minWidth: "150px", outline: "none" },
-  input: { padding: "10px 15px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "15px", width: "100px", outline: "none" },
-  reportBtn: { padding: "10px 24px", background: "#3A7DFF", color: "white", border: "none", borderRadius: "8px", fontSize: "15px", fontWeight: "600", cursor: "pointer", boxShadow: "0 4px 6px rgba(58, 125, 255, 0.3)", height: "42px" },
-  printBtn: { padding: "8px 16px", background: "#fff", color: "#334155", border: "1px solid #cbd5e1", borderRadius: "6px", fontSize: "14px", fontWeight: "600", cursor: "pointer", display: 'flex', alignItems: 'center', gap: '5px' },
-  resultSection: { animation: "fadeIn 0.5s ease-in-out" },
-  reportHeader: { marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '10px' },
-  tableCard: { background: "white", borderRadius: "16px", boxShadow: "0 4px 20px rgba(0,0,0,0.05)", overflow: "hidden" },
+  title: { fontSize: "2rem", fontWeight: "700", color: "#1F2A40", marginBottom: "1.5rem" },
+  
+  tabContainer: { display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '2px solid #e2e8f0' },
+  tab: { padding: '10px 20px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748b', fontWeight: '600', fontSize: '15px' },
+  tabActive: { padding: '10px 20px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#3b82f6', fontWeight: 'bold', fontSize: '15px', borderBottom: '3px solid #3b82f6', marginBottom: '-2px' },
+
+  filterCard: { background: "white", padding: "20px", borderRadius: "12px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.05)", marginBottom: "20px" },
+  filterRow: { display: "flex", gap: "10px" },
+  radioLabel: { cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '5px' },
+  select: { padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" },
+  input: { padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1", width: "100px" },
+  
+  selectSmall: { padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", outline: 'none' },
+  inputSmall: { padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", outline: 'none' },
+
+  btnPrimary: { padding: "10px 20px", background: "#3A7DFF", color: "white", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer" },
+  btnSuccess: { padding: "8px 16px", background: "#10b981", color: "white", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer" },
+  btnPrint: { padding: "8px 16px", background: "#64748b", color: "white", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer" },
+  
+  deleteIcon: { color: '#ef4444', fontWeight: 'bold', cursor: 'pointer', padding: '2px 6px', borderRadius: '4px', fontSize: '12px', background: '#fee2e2' },
+
+  resultHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', borderBottom: '2px solid #e2e8f0', paddingBottom: '15px' },
+  timeText: { margin: '5px 0 0 0', color: '#64748b', fontStyle: 'italic', fontSize: '14px' },
+
+  tableCard: { background: "white", borderRadius: "12px", overflow: "hidden", border: '1px solid #e2e8f0' },
   table: { width: "100%", borderCollapse: "collapse" },
-  tableHeader: { background: "#718096" },
-  th: { padding: "16px 24px", textAlign: "left", color: "#fff", fontWeight: "600", textTransform: "uppercase", fontSize: "13px", letterSpacing: "0.5px" },
-  td: { padding: "16px 24px", borderBottom: "1px solid #f1f5f9", color: "#334155", fontSize: "15px" },
-  tr: { transition: "0.2s" },
-  saveBtn: { 
-      padding: "8px 16px", 
-      background: "#10b981", // Màu xanh lá
-      color: "white", 
-      border: "none", 
-      borderRadius: "6px", 
-      fontSize: "14px", 
-      fontWeight: "600", 
-      cursor: "pointer", 
-      display: 'flex', 
-      alignItems: 'center', 
-      gap: '5px',
-      boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
-  },
-  viewSavedBtn: { 
-      padding: "10px 24px", 
-      background: "#fff", 
-      color: "#4f46e5", // Màu tím/xanh đậm khác biệt chút
-      border: "1px solid #c7d2fe", 
-      borderRadius: "8px", 
-      fontSize: "15px", 
-      fontWeight: "600", 
-      cursor: "pointer", 
-      height: "42px",
-      display: 'flex',
-      alignItems: 'center',
-      gap: '5px'
-  },
-  deleteBtn: {
-      padding: "8px 16px",
-      background: "#fee2e2", // Đỏ nhạt
-      color: "#dc2626",      // Chữ đỏ đậm
-      border: "1px solid #fecaca",
-      borderRadius: "6px",
-      fontSize: "14px",
-      fontWeight: "600",
-      cursor: "pointer",
-      display: 'flex',
-      alignItems: 'center',
-      gap: '5px'
-  },
+  tableHeader: { background: "#f1f5f9" },
+  th: { padding: "12px 16px", textAlign: "left", fontSize: "13px", color: "#475569", textTransform: "uppercase" },
+  td: { padding: "12px 16px", fontSize: "14px", color: "#334155" },
 };
 
 export default ReportManagement;
