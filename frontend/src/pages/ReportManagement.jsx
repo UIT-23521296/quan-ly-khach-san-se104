@@ -5,7 +5,10 @@ import { Navigate } from "react-router-dom";
 const ReportManagement = () => {
   // ✅ CHẶN USER NGAY TRÊN ĐẦU (trước mọi hook)
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  if (user?.vaiTro !== "Admin") return <Navigate to="/" replace />;
+  const role = user?.vaiTro; // Admin | Manage | User
+  const canViewReport = ["Admin", "Manage"].includes(role);
+
+  if (!canViewReport) return <Navigate to="/" replace />;
 
   const [activeTab, setActiveTab] = useState("create"); // 'create' | 'saved'
 
@@ -94,10 +97,10 @@ const ReportManagement = () => {
             </thead>
             <tbody>
               ${safeData
-                .map((item, index) => {
-                  const doanhThu = Number(item?.DoanhThu || 0);
-                  const percent = total > 0 ? ((doanhThu / total) * 100).toFixed(2) : 0;
-                  return `
+        .map((item, index) => {
+          const doanhThu = Number(item?.DoanhThu || 0);
+          const percent = total > 0 ? ((doanhThu / total) * 100).toFixed(2) : 0;
+          return `
                     <tr>
                       <td>${index + 1}</td>
                       <td class="text-left">${item?.TenLoaiPhong || item?.MaLoaiPhong || ""}</td>
@@ -105,8 +108,8 @@ const ReportManagement = () => {
                       <td>${percent}%</td>
                     </tr>
                   `;
-                })
-                .join("")}
+        })
+        .join("")}
               <tr class="total-row">
                 <td colspan="2">TỔNG CỘNG</td>
                 <td class="text-right">${Number(total || 0).toLocaleString("vi-VN")} đ</td>

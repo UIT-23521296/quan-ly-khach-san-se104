@@ -1,3 +1,4 @@
+// frontend/src/pages/StaffManagement.jsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import api from "../services/api";
@@ -14,7 +15,7 @@ const normalizeUser = (u) => {
   const id = pick(u, ["MaNV", "id", "ID", "userId"]);
   const username = pick(u, ["Username", "username", "TenDangNhap"]);
   const hoTen = pick(u, ["HoTen", "hoTen", "fullName", "TenNV"]);
-  const vaiTro = pick(u, ["VaiTro", "vaiTro", "role"], "User");
+  const vaiTro = pick(u, ["VaiTro", "vaiTro", "role"], "User"); // Admin | Manage | User
   const ngayTao = pick(u, ["NgayTao", "createdAt", "ngayTao"]);
   return { raw: u, id, username, hoTen, vaiTro, ngayTao };
 };
@@ -40,14 +41,17 @@ const emptyForm = {
 const StaffManagement = () => {
   // ✅ Role check (KHÔNG return trước hook)
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const isAdmin = user?.vaiTro === "Admin";
+  const role = user?.vaiTro; // Admin | Manage | User
+  const isAdmin = role === "Admin";
+  const isManage = role === "Manage";
+  const canAccess = isAdmin || isManage;
 
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(false);
 
   // Search + Filter
   const [searchTerm, setSearchTerm] = useState("");
-  const [roleFilter, setRoleFilter] = useState("ALL"); // ALL | Admin | User
+  const [roleFilter, setRoleFilter] = useState("ALL"); // Admin dùng: ALL | Admin | Manage | User
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -57,53 +61,11 @@ const StaffManagement = () => {
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState({});
 
-  // ========= API call with fallback =========
-  const apiGetWithFallback = useCallback(async (primary, fallback) => {
-    try {
-      return await api.get(primary);
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 404 && fallback) return await api.get(fallback);
-      throw err;
-    }
-  }, []);
-
-  const apiPutWithFallback = useCallback(async (primary, fallback, payload) => {
-    try {
-      return await api.put(primary, payload);
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 404 && fallback) return await api.put(fallback, payload);
-      throw err;
-    }
-  }, []);
-
-  const apiDeleteWithFallback = useCallback(async (primary, fallback) => {
-    try {
-      return await api.delete(primary);
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 404 && fallback) return await api.delete(fallback);
-      throw err;
-    }
-  }, []);
-
-  const apiPostWithFallback = useCallback(async (primary, fallback, payload) => {
-    try {
-      return await api.post(primary, payload);
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 404 && fallback) return await api.post(fallback, payload);
-      throw err;
-    }
-  }, []);
-
   // ========= Fetch list =========
   const fetchStaff = useCallback(async () => {
     setLoading(true);
     try {
-      // ưu tiên /users, fallback /staff
-      const res = await apiGetWithFallback("/users", "/staff");
+      const res = isAdmin ? await api.get("/users") : await api.get("/users/managed");
       const list = Array.isArray(res.data) ? res.data : [];
       setStaff(list.map(normalizeUser));
     } catch (e) {
@@ -112,17 +74,20 @@ const StaffManagement = () => {
     } finally {
       setLoading(false);
     }
-  }, [apiGetWithFallback]);
+  }, [isAdmin]);
 
   useEffect(() => {
-    if (isAdmin) fetchStaff();
-  }, [fetchStaff, isAdmin]);
+    if (canAccess) fetchStaff();
+  }, [fetchStaff, canAccess]);
 
   // ========= Modal handlers =========
   const openAddModal = () => {
     setMode("add");
     setEditing(null);
-    setForm(emptyForm);
+    setForm({
+      ...emptyForm,
+      vaiTro: "User", // Manage luôn User; Admin mặc định User
+    });
     setErrors({});
     setIsModalOpen(true);
   };
@@ -134,7 +99,7 @@ const StaffManagement = () => {
       username: row.username || "",
       password: "", // edit: password optional
       hoTen: row.hoTen || "",
-      vaiTro: row.vaiTro || "User",
+      vaiTro: isAdmin ? row.vaiTro || "User" : "User",
     });
     setErrors({});
     setIsModalOpen(true);
@@ -155,12 +120,11 @@ const StaffManagement = () => {
     const errs = {};
     if (!form.username.trim()) errs.username = "Username không được trống";
     if (!form.hoTen.trim()) errs.hoTen = "Họ tên không được trống";
-    if (!form.vaiTro) errs.vaiTro = "Chọn vai trò";
+    if (isAdmin && !form.vaiTro) errs.vaiTro = "Chọn vai trò";
 
     if (mode === "add") {
       if (!form.password || form.password.length < 6) errs.password = "Mật khẩu tối thiểu 6 ký tự";
     } else {
-      // edit: nếu nhập mật khẩu mới thì cũng phải >= 6
       if (form.password && form.password.length < 6) errs.password = "Mật khẩu mới tối thiểu 6 ký tự";
     }
 
@@ -176,33 +140,48 @@ const StaffManagement = () => {
     setSaving(true);
     try {
       if (mode === "add") {
-        // ✅ đúng với authRoutes.js bạn gửi: POST /auth/create {username,password,hoTen,vaiTro}
-        const payload = {
-          username: form.username.trim(),
-          password: form.password,
-          hoTen: form.hoTen.trim(),
-          vaiTro: form.vaiTro,
-        };
-
-        await apiPostWithFallback("/auth/create", "/users", payload);
+        if (isAdmin) {
+          // Admin tạo User/Manage
+          const payload = {
+            username: form.username.trim(),
+            password: form.password,
+            hoTen: form.hoTen.trim(),
+            vaiTro: form.vaiTro, // User | Manage
+          };
+          await api.post("/users", payload);
+        } else {
+          // Manage chỉ tạo User
+          const payload = {
+            username: form.username.trim(),
+            password: form.password,
+            hoTen: form.hoTen.trim(),
+          };
+          await api.post("/users/managed", payload);
+        }
         alert("✅ Tạo nhân viên thành công!");
       } else {
-        // update (đặt theo pattern phổ biến)
-        // payload update: cho phép sửa username/hoTen/vaiTro, password nếu có nhập
-        const payload = {
-          username: form.username.trim(),
-          hoTen: form.hoTen.trim(),
-          vaiTro: form.vaiTro,
-          ...(form.password ? { password: form.password } : {}),
-        };
-
         const id = editing?.id;
         if (!id) {
           alert("❌ Không xác định được mã nhân viên để cập nhật.");
           return;
         }
 
-        await apiPutWithFallback(`/users/${id}`, `/staff/${id}`, payload);
+        if (isAdmin) {
+          const payload = {
+            username: form.username.trim(),
+            hoTen: form.hoTen.trim(),
+            vaiTro: form.vaiTro,
+            ...(form.password ? { password: form.password } : {}),
+          };
+          await api.put(`/users/${id}`, payload);
+        } else {
+          const payload = {
+            username: form.username.trim(),
+            hoTen: form.hoTen.trim(),
+            ...(form.password ? { password: form.password } : {}),
+          };
+          await api.put(`/users/managed/${id}`, payload);
+        }
         alert("✅ Cập nhật nhân viên thành công!");
       }
 
@@ -222,10 +201,16 @@ const StaffManagement = () => {
     const id = row?.id;
     if (!id) return alert("❌ Không xác định được mã nhân viên để xóa.");
 
+    if (String(row?.vaiTro) === "Admin") {
+      return alert("❌ Không được xóa tài khoản Admin.");
+    }
+
     if (!window.confirm(`Bạn chắc chắn muốn XÓA nhân viên "${row.hoTen}" (ID: ${id})?`)) return;
 
     try {
-      await apiDeleteWithFallback(`/users/${id}`, `/staff/${id}`);
+      if (isAdmin) await api.delete(`/users/${id}`);
+      else await api.delete(`/users/managed/${id}`);
+
       alert("✅ Đã xóa nhân viên!");
       fetchStaff();
     } catch (err) {
@@ -239,7 +224,12 @@ const StaffManagement = () => {
     const term = searchTerm.trim().toLowerCase();
 
     return staff.filter((s) => {
-      if (roleFilter !== "ALL" && String(s.vaiTro) !== roleFilter) return false;
+      // Manage chỉ thấy User (thêm lớp chắn dù backend đã lọc)
+      if (isManage && String(s.vaiTro) !== "User") return false;
+
+      // Admin filter theo roleFilter
+      if (isAdmin && roleFilter !== "ALL" && String(s.vaiTro) !== roleFilter) return false;
+
       if (!term) return true;
 
       return (
@@ -249,27 +239,32 @@ const StaffManagement = () => {
         String(s.vaiTro).toLowerCase().includes(term)
       );
     });
-  }, [staff, searchTerm, roleFilter]);
+  }, [staff, searchTerm, roleFilter, isAdmin, isManage]);
 
   // ========= Guard =========
-  if (!isAdmin) return <Navigate to="/" replace />;
+  if (!canAccess) return <Navigate to="/" replace />;
 
   return (
     <div style={styles.wrapper}>
       <div style={styles.headerRow}>
         <div>
-          <h1 style={styles.title}>👥 Quản lý nhân viên</h1>
+          <h1 style={styles.title}>{isAdmin ? "🔐 Phân quyền" : "👥 Quản lý nhân viên"}</h1>
           <p style={styles.subtitle}>
-            Tạo tài khoản nhân viên (User) và quản trị (Admin). Chỉ Admin được truy cập trang này.
+            {isAdmin
+              ? "Admin quản lý toàn bộ tài khoản (Manage/User), thay đổi vai trò và thông tin. (Không được xóa Admin)"
+              : "Manage chỉ quản lý tài khoản User (không cấp quyền, không đổi vai trò)."}
           </p>
         </div>
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} style={styles.select}>
-            <option value="ALL">Tất cả vai trò</option>
-            <option value="Admin">Admin</option>
-            <option value="User">User</option>
-          </select>
+          {isAdmin && (
+            <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} style={styles.select}>
+              <option value="ALL">Tất cả vai trò</option>
+              <option value="Admin">Admin</option>
+              <option value="Manage">Manage</option>
+              <option value="User">User</option>
+            </select>
+          )}
 
           <div style={{ position: "relative" }}>
             <input
@@ -279,11 +274,7 @@ const StaffManagement = () => {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
             {searchTerm && (
-              <button
-                style={styles.clearBtn}
-                title="Xóa tìm kiếm"
-                onClick={() => setSearchTerm("")}
-              >
+              <button style={styles.clearBtn} title="Xóa tìm kiếm" onClick={() => setSearchTerm("")}>
                 ✕
               </button>
             )}
@@ -348,9 +339,12 @@ const StaffManagement = () => {
                       <button style={styles.btnEdit} onClick={() => openEditModal(s)}>
                         ✏️ Sửa
                       </button>
-                      <button style={styles.btnDelete} onClick={() => handleDelete(s)}>
-                        🗑️ Xóa
-                      </button>
+
+                      {String(s.vaiTro) !== "Admin" && (
+                        <button style={styles.btnDelete} onClick={() => handleDelete(s)}>
+                          🗑️ Xóa
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -388,20 +382,27 @@ const StaffManagement = () => {
                   {errors.username && <div style={styles.errorText}>{errors.username}</div>}
                 </div>
 
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>Vai trò</label>
-                  <select
-                    name="vaiTro"
-                    value={form.vaiTro}
-                    onChange={handleChange}
-                    style={styles.input}
-                    disabled={saving}
-                  >
-                    <option value="User">User (Nhân viên)</option>
-                    <option value="Admin">Admin (Chủ khách sạn)</option>
-                  </select>
-                  {errors.vaiTro && <div style={styles.errorText}>{errors.vaiTro}</div>}
-                </div>
+                {isAdmin ? (
+                  <div style={styles.formGroup}>
+                    <label style={styles.label}>Vai trò</label>
+                    <select
+                      name="vaiTro"
+                      value={form.vaiTro}
+                      onChange={handleChange}
+                      style={styles.input}
+                      disabled={saving}
+                    >
+                      <option value="User">User (Nhân viên)</option>
+                      <option value="Manage">Manage (Quản lý)</option>
+                    </select>
+                    {errors.vaiTro && <div style={styles.errorText}>{errors.vaiTro}</div>}
+                  </div>
+                ) : (
+                  <div style={styles.formGroup}>
+                    <label style={styles.label}>Vai trò</label>
+                    <input value="User (Nhân viên)" disabled style={styles.input} />
+                  </div>
+                )}
 
                 <div style={styles.formGroup}>
                   <label style={styles.label}>Họ tên</label>
@@ -418,7 +419,8 @@ const StaffManagement = () => {
 
                 <div style={styles.formGroup}>
                   <label style={styles.label}>
-                    Mật khẩu {mode === "edit" ? <span style={{ color: "#64748b" }}>(bỏ trống nếu không đổi)</span> : null}
+                    Mật khẩu{" "}
+                    {mode === "edit" ? <span style={{ color: "#64748b" }}>(bỏ trống nếu không đổi)</span> : null}
                   </label>
                   <input
                     name="password"
@@ -443,8 +445,15 @@ const StaffManagement = () => {
               </div>
 
               <div style={styles.hintBox}>
-                <b>Lưu ý:</b> Trang này dùng endpoint ưu tiên <code>/users</code> (list/update/delete) và{" "}
-                <code>/auth/create</code> (create). Nếu backend bạn đang dùng <code>/staff</code> thì file này tự fallback.
+                <b>Lưu ý:</b> Trang này dùng:
+                <ul style={{ margin: "8px 0 0 18px" }}>
+                  <li>
+                    Admin: <code>/users</code>
+                  </li>
+                  <li>
+                    Manage: <code>/users/managed</code>
+                  </li>
+                </ul>
               </div>
             </form>
           </div>
@@ -501,7 +510,7 @@ const styles = {
     color: "white",
     cursor: "pointer",
     fontWeight: 700,
-    boxShadow: "0 10px 18px rgba(58,125,255,0.25)",
+    boxShadow: "0 10px 18px rgba(58, 125, 255, 0.25)",
     whiteSpace: "nowrap",
   },
 
@@ -639,7 +648,7 @@ const styles = {
     color: "white",
     cursor: "pointer",
     fontWeight: 900,
-    boxShadow: "0 10px 18px rgba(58,125,255,0.25)",
+    boxShadow: "0 10px 18px rgba(58, 125, 255, 0.25)",
   },
 
   hintBox: {
@@ -655,16 +664,18 @@ const styles = {
 };
 
 const roleBadgeStyle = (role) => {
-  const isAdmin = role === "Admin";
+  const r = String(role);
+  const isAdmin = r === "Admin";
+  const isManage = r === "Manage";
   return {
     display: "inline-block",
     padding: "4px 10px",
     borderRadius: 999,
     fontWeight: 900,
     fontSize: 12,
-    background: isAdmin ? "#ede9fe" : "#dcfce7",
-    color: isAdmin ? "#6d28d9" : "#15803d",
-    border: isAdmin ? "1px solid #ddd6fe" : "1px solid #bbf7d0",
+    background: isAdmin ? "#ede9fe" : isManage ? "#ffedd5" : "#dcfce7",
+    color: isAdmin ? "#6d28d9" : isManage ? "#9a3412" : "#15803d",
+    border: isAdmin ? "1px solid #ddd6fe" : isManage ? "1px solid #fed7aa" : "1px solid #bbf7d0",
   };
 };
 

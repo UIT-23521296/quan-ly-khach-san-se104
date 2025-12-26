@@ -8,21 +8,21 @@ router.use(auth);
 const controller = require("../controllers/phieuthueController");
 
 // Lấy danh sách
-router.get("/", allow("Admin","User"), controller.getAllPhieuThue);
+router.get("/", allow("Admin", "Manage","User"), controller.getAllPhieuThue);
 
 // Tạo mới
-router.post("/", allow("Admin","User"), controller.createPhieuThue);
+router.post("/", allow("Admin", "Manage","User"), controller.createPhieuThue);
 
 // Cập nhật (Sửa)
-router.put("/:soPhieu", allow("Admin","User"), controller.updatePhieuThue);
+router.put("/:soPhieu", allow("Admin", "Manage","User"), controller.updatePhieuThue);
 
 // Trả phòng
-router.put("/:soPhieu/checkout", allow("Admin","User"), controller.checkOut);
+router.put("/:soPhieu/checkout", allow("Admin", "Manage","User"), controller.checkOut);
 
 // Hủy phiếu
-router.put("/:soPhieu/huy", allow("Admin","User"), controller.huyPhieu);
+router.put("/:soPhieu/huy", allow("Admin", "Manage","User"), controller.huyPhieu);
 
 // Xóa phiếu
-router.delete("/:id", allow("Admin"), controller.deletePhieu);
+router.delete("/:id", allow("Admin", "Manage"), controller.deletePhieu);
 
 module.exports = router;

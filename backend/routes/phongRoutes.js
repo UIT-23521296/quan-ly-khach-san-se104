@@ -16,14 +16,14 @@ const {
 
 router.use(auth);
 
-router.get("/", allow("Admin", "User"), getAllRooms);
-router.get("/:id", allow("Admin", "User"), getRoomById);
+router.get("/", allow("Admin", "Manage", "User"), getAllRooms);
+router.get("/:id", allow("Admin", "Manage", "User"), getRoomById);
 
-router.post("/", allow("Admin"), createRoom);
-router.put("/:id", allow("Admin"), updateRoom);
-router.delete("/:id", allow("Admin"), deleteRoom);
+router.post("/", allow("Admin", "Manage"), createRoom);
+router.put("/:id", allow("Admin", "Manage"), updateRoom);
+router.delete("/:id", allow("Admin", "Manage"), deleteRoom);
 
-router.put("/:id/maintenance", allow("Admin"), toggleMaintenance);
-router.put("/:id/business", allow("Admin"), toggleBusinessStatus);
+router.put("/:id/maintenance", allow("Admin", "Manage"), toggleMaintenance);
+router.put("/:id/business", allow("Admin", "Manage"), toggleBusinessStatus);
 
 module.exports = router;

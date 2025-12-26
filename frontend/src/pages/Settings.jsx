@@ -1,11 +1,14 @@
-import React, { useState, useEffect, useCallback } from "react";
+// frontend/src/pages/Settings.jsx
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import api from "../services/api";
 import { Navigate } from "react-router-dom";
 
 const Settings = () => {
   // ✅ Role check (KHÔNG return trước hook)
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const isAdmin = user?.vaiTro === "Admin";
+  const role = user?.vaiTro; // Admin | Manage | User
+  const isAdmin = role === "Admin";
+  const canView = isAdmin || role === "Manage" || role === "User"; // ai cũng xem Quy định
 
   const [activeTab, setActiveTab] = useState("loaiphong");
 
@@ -66,10 +69,21 @@ const Settings = () => {
   }, [activeTab]);
 
   useEffect(() => {
-    if (isAdmin) fetchData();
-  }, [fetchData, isAdmin]);
+    if (canView) fetchData();
+  }, [fetchData, canView]);
+
+  // ===== Quyền sửa =====
+  const canEdit = isAdmin; // ✅ Manage/User chỉ xem
+
+  // (Optional) chặn gọi nhầm CRUD nếu không phải admin
+  const forbidIfNoEdit = () => {
+    if (canEdit) return false;
+    alert("⚠️ Bạn chỉ có quyền XEM Quy định, không được thay đổi.");
+    return true;
+  };
 
   const handleDelete = async (id, type) => {
+    if (forbidIfNoEdit()) return;
     if (!window.confirm("⚠️ Bạn có chắc chắn muốn XÓA VĨNH VIỄN mục này?")) return;
     try {
       await api.delete(`/quidinh/${type}/${id}`);
@@ -82,6 +96,8 @@ const Settings = () => {
   };
 
   const handleSave = async () => {
+    if (forbidIfNoEdit()) return;
+
     try {
       if (activeTab === "loaiphong") {
         const rawPrice = form.DonGia ? String(form.DonGia).replace(/,/g, "") : "0";
@@ -137,7 +153,6 @@ const Settings = () => {
           return;
         }
 
-        // ✅ Nếu backend bạn có PUT thì dùng; nếu chưa có thì bạn có thể đổi lại chỉ POST
         if (editingItem) {
           await api.put(`/quidinh/phuthu/${editingItem.KhachThu}`, payload);
         } else {
@@ -156,6 +171,8 @@ const Settings = () => {
   };
 
   const handleSaveThamSo = async () => {
+    if (forbidIfNoEdit()) return;
+
     try {
       const payload = {
         SoKhachToiDa: Number(thamSo.SoKhachToiDa),
@@ -166,10 +183,7 @@ const Settings = () => {
         alert("❌ Số khách tối đa phải là số > 0.");
         return;
       }
-      if (
-        Number.isNaN(payload.SoKhachKhongTinhPhuThu) ||
-        payload.SoKhachKhongTinhPhuThu < 0
-      ) {
+      if (Number.isNaN(payload.SoKhachKhongTinhPhuThu) || payload.SoKhachKhongTinhPhuThu < 0) {
         alert("❌ Số khách tiêu chuẩn không hợp lệ.");
         return;
       }
@@ -187,6 +201,11 @@ const Settings = () => {
   };
 
   const openModal = (item) => {
+    if (!canEdit) {
+      alert("⚠️ Bạn chỉ có quyền XEM Quy định, không được thay đổi.");
+      return;
+    }
+
     setEditingItem(item);
 
     if (item) {
@@ -201,6 +220,8 @@ const Settings = () => {
   };
 
   const renderActions = (item, id, type) => {
+    if (!canEdit) return <span style={{ color: "#94a3b8" }}>Chỉ xem</span>;
+
     return (
       <div style={{ display: "flex", gap: "8px", justifyContent: "center" }}>
         <button style={styles.btnEdit} onClick={() => openModal(item)} title="Sửa thông tin">
@@ -213,8 +234,17 @@ const Settings = () => {
     );
   };
 
-  // ✅ Redirect staff/user
-  if (!isAdmin) return <Navigate to="/" replace />;
+  const readOnlyBanner = useMemo(() => {
+    if (canEdit) return null;
+    return (
+      <div style={styles.readOnlyBanner}>
+        👀 Bạn đang ở chế độ <b>Chỉ xem</b>. Chỉ <b>Admin</b> mới được thay đổi các quy định.
+      </div>
+    );
+  }, [canEdit]);
+
+  // ✅ Redirect nếu chưa đăng nhập/không có role hợp lệ
+  if (!canView) return <Navigate to="/" replace />;
 
   return (
     <div style={styles.wrapper}>
@@ -224,6 +254,8 @@ const Settings = () => {
           <p style={styles.subtitle}>Quản lý danh mục phòng, khách và tham số hệ thống.</p>
         </div>
       </div>
+
+      {readOnlyBanner}
 
       <div style={styles.tabContainer}>
         {["loaiphong", "loaikhach", "phuthu", "thamso"].map((tab) => (
@@ -246,11 +278,13 @@ const Settings = () => {
         {/* --- LOẠI PHÒNG --- */}
         {activeTab === "loaiphong" && (
           <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
-              <button style={styles.btnAdd} onClick={() => openModal(null)}>
-                + Thêm Loại Phòng
-              </button>
-            </div>
+            {canEdit && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
+                <button style={styles.btnAdd} onClick={() => openModal(null)}>
+                  + Thêm Loại Phòng
+                </button>
+              </div>
+            )}
 
             <div style={styles.card}>
               <table style={styles.table}>
@@ -300,11 +334,13 @@ const Settings = () => {
         {/* --- LOẠI KHÁCH --- */}
         {activeTab === "loaikhach" && (
           <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
-              <button style={styles.btnAdd} onClick={() => openModal(null)}>
-                + Thêm Loại Khách
-              </button>
-            </div>
+            {canEdit && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
+                <button style={styles.btnAdd} onClick={() => openModal(null)}>
+                  + Thêm Loại Khách
+                </button>
+              </div>
+            )}
 
             <div style={styles.card}>
               <table style={styles.table}>
@@ -351,11 +387,13 @@ const Settings = () => {
         {/* --- PHỤ THU --- */}
         {activeTab === "phuthu" && (
           <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
-              <button style={styles.btnAdd} onClick={() => openModal(null)}>
-                + Thêm Mốc Phụ Thu
-              </button>
-            </div>
+            {canEdit && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
+                <button style={styles.btnAdd} onClick={() => openModal(null)}>
+                  + Thêm Mốc Phụ Thu
+                </button>
+              </div>
+            )}
 
             <div style={styles.card}>
               <table style={styles.table}>
@@ -418,6 +456,7 @@ const Settings = () => {
                   style={styles.inputLarge}
                   value={thamSo.SoKhachToiDa}
                   onChange={(e) => setThamSo({ ...thamSo, SoKhachToiDa: Number(e.target.value) })}
+                  disabled={!canEdit}
                 />
               </div>
 
@@ -430,22 +469,34 @@ const Settings = () => {
                   type="number"
                   style={styles.inputLarge}
                   value={thamSo.SoKhachKhongTinhPhuThu}
-                  onChange={(e) => setThamSo({ ...thamSo, SoKhachKhongTinhPhuThu: Number(e.target.value) })}
+                  onChange={(e) =>
+                    setThamSo({ ...thamSo, SoKhachKhongTinhPhuThu: Number(e.target.value) })
+                  }
+                  disabled={!canEdit}
                 />
               </div>
 
-              <div style={{ textAlign: "right", marginTop: "40px", paddingTop: "20px", borderTop: "1px solid #e2e8f0" }}>
-                <button style={styles.btnSave} onClick={handleSaveThamSo}>
-                  💾 Lưu Thay Đổi
-                </button>
-              </div>
+              {canEdit && (
+                <div
+                  style={{
+                    textAlign: "right",
+                    marginTop: "40px",
+                    paddingTop: "20px",
+                    borderTop: "1px solid #e2e8f0",
+                  }}
+                >
+                  <button style={styles.btnSave} onClick={handleSaveThamSo}>
+                    💾 Lưu Thay Đổi
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
 
-      {/* MODAL */}
-      {isModalOpen && (
+      {/* MODAL (Admin-only) */}
+      {canEdit && isModalOpen && (
         <div style={styles.overlay} onClick={() => setIsModalOpen(false)}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
             <div style={styles.modalHeader}>
@@ -535,7 +586,7 @@ const Settings = () => {
                     <input
                       type="number"
                       style={styles.inputModal}
-                      disabled={!!editingItem} // ✅ tránh đổi khóa chính khi sửa
+                      disabled={!!editingItem}
                       value={form.KhachThu ?? ""}
                       onChange={(e) => setForm({ ...form, KhachThu: Number(e.target.value) })}
                     />
@@ -554,7 +605,15 @@ const Settings = () => {
                 </>
               )}
 
-              <div style={{ textAlign: "right", marginTop: 30, display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+              <div
+                style={{
+                  textAlign: "right",
+                  marginTop: 30,
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: "12px",
+                }}
+              >
                 <button style={styles.btnCancel} onClick={() => setIsModalOpen(false)}>
                   Hủy bỏ
                 </button>
@@ -576,6 +635,16 @@ const styles = {
   headerRow: { marginBottom: "2rem" },
   title: { fontSize: "2rem", fontWeight: 800, color: "#1e293b", marginBottom: "0.5rem" },
   subtitle: { color: "#64748b", fontSize: "1rem" },
+
+  readOnlyBanner: {
+    marginBottom: 14,
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #e2e8f0",
+    background: "#f8fafc",
+    color: "#475569",
+    fontWeight: 600,
+  },
 
   content: { marginTop: "10px" },
 
