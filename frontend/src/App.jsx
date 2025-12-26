@@ -18,6 +18,7 @@ import ReportManagement from "./pages/ReportManagement";
 import Settings from "./pages/Settings";
 import CustomerManagement from "./pages/CustomerManagement";
 import StaffManagement from "./pages/StaffManagement";
+import ChatBot from "./components/ChatBot";
 
 function PrivateLayout({ children }) {
   const token = localStorage.getItem("token");
@@ -31,6 +32,9 @@ function PrivateLayout({ children }) {
         <SidebarWrapper />
         <div style={styles.content}>{children}</div>
       </div>
+
+      {/* ✅ CHATBOT GẮN Ở ĐÂY */}
+      <ChatBot />
     </div>
   );
 }
@@ -45,7 +49,6 @@ function RequireRole({ allow, children }) {
 
   return children;
 }
-
 
 function SidebarWrapper() {
   const [activeMenu, setActiveMenu] = useState("dashboard");
@@ -116,7 +119,6 @@ function App() {
           }
         />
 
-
         <Route
           path="/settings"
           element={
@@ -127,7 +129,6 @@ function App() {
             </PrivateLayout>
           }
         />
-
 
         <Route
           path="/customers"
@@ -148,7 +149,6 @@ function App() {
             </PrivateLayout>
           }
         />
-
       </Routes>
     </Router>
   );

@@ -38,6 +38,7 @@ app.use("/api/quidinh", require("./routes/quidinhRoutes"));
 app.use("/api/khachhang", khachhangRoutes);
 app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));
+app.use("/api/chatbot", require("./routes/chatbot.routes"));
 
 // Test API
 app.get("/api/test", (req, res) => {
