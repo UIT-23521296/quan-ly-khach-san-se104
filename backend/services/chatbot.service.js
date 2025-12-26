@@ -36,8 +36,66 @@ function isSafeSQL(sql) {
   const forbidden = /(insert|update|delete|drop|alter|truncate|create)/i;
   return !forbidden.test(cleaned);
 }
+function isMeaningfulQuestion(text) {
+  const cleaned = text.toLowerCase().trim();
+
+  // 1. Quá ngắn
+  if (cleaned.length < 3) return false;
+
+  // 2. Các pattern linh tinh / small talk
+  const smallTalkPatterns = [
+    // tiếng Anh
+    /^(hi|hello|hey|alo)+$/,
+    /^(ok|okay|test)+$/,
+
+    // cười
+    /^(ha|he|hi)+$/,
+    /^(haha|hehe|hihi)+$/,
+
+    // tiếng Việt xã giao
+    /^(ừ|uh|ờ|ơ|dạ|ạ)+$/,
+    /^(chào|xin chào)+$/,
+    /^(cảm ơn|thanks)+$/,
+    /^(vâng|đúng rồi)+$/,
+
+    // ký tự vô nghĩa
+    /^[a-z]{1,2}$/,
+    /^[0-9]{1,2}$/,
+    /^.{1,2}$/,
+  ];
+
+  if (smallTalkPatterns.some((p) => p.test(cleaned))) {
+    return false;
+  }
+
+  // 3. Phải chứa ít nhất 1 từ khóa nghiệp vụ
+  const businessKeywords = [
+    "phòng",
+    "phieu",
+    "phiếu",
+    "thuê",
+    "trả",
+    "hóa đơn",
+    "hoá đơn",
+    "doanh thu",
+    "báo cáo",
+    "giá",
+    "loại",
+    "đặt",
+    "khách",
+    "ngày",
+    "hôm nay",
+    "tháng",
+    "năm",
+  ];
+
+  return businessKeywords.some((kw) => cleaned.includes(kw));
+}
 
 async function askDatabase(question) {
+  if (!isMeaningfulQuestion(question)) {
+    return "😄 Bạn cần hỗ trợ thông tin gì về phòng, hóa đơn hoặc đặt phòng không?";
+  }
   // 1. AI sinh SQL
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
@@ -194,6 +252,7 @@ Bạn là nhân viên lễ tân trả lời qua chatbot.
 - KHÔNG dùng văn phong email
 - KHÔNG ký tên
 - Bạn chỉ trả lời dựa trên DỮ LIỆU được cung cấp.
+- Nếu câu giao tiếp bình thường thì trả lời lịch sự, thân thiện.
 - Nếu không có dữ liệu, bạn nói "Rất tiếc, không tìm thấy thông tin phù hợp."
 - Phù hợp giao diện chat
 `,
