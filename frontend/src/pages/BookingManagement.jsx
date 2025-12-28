@@ -1,3 +1,4 @@
+//frontend/src/pages/BookingManagement.jsx
 import React, { useEffect, useState } from "react";
 import api from "../services/api";
 
@@ -8,6 +9,7 @@ const emptyForm = {
   MaPhong: "",
   NgayBatDauThue: "",
   NgayDuKienTra: "",
+  GhiChu: "",
 };
 
 const emptyKhach = {
@@ -19,103 +21,149 @@ const emptyKhach = {
 };
 
 const BookingManagement = () => {
+  // ✅ ROLE CHECK (ẩn nút theo vai trò)
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const isAdmin = user?.vaiTro === "Admin";
+
+  // --- STATE ---
   const [bookings, setBookings] = useState([]);
   const [rooms, setRooms] = useState([]);
   const [guestTypes, setGuestTypes] = useState([]);
+  const [soKhachToiDa, setSoKhachToiDa] = useState(1);
+
+  // Bộ lọc Tab
+  const [filterStatus, setFilterStatus] = useState("ALL");
+  // Bộ lọc Tìm kiếm
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState("create");
+  const [loading, setLoading] = useState(false);
 
   const [form, setForm] = useState(emptyForm);
   const [khachList, setKhachList] = useState([{ ...emptyKhach }]);
-  const [soKhachToiDa, setSoKhachToiDa] = useState(1);
+  const [selectedPhieu, setSelectedPhieu] = useState(null);
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  // Bộ lọc Ngày
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
+
+  // Lưu số lượng khách lúc mới mở form
+  const [initialGuestCount, setInitialGuestCount] = useState(0);
+
+  // Hóa đơn
+  const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
+  const [billPreview, setBillPreview] = useState(null);
+  const [tienKhachDua, setTienKhachDua] = useState("");
 
   /* =====================
-     LOAD DATA
+      LOAD DATA
   ===================== */
   useEffect(() => {
-    fetchBookings();
-    fetchRooms();
-    fetchGuestTypes();
-    fetchSoKhachMax();
+    fetchData();
   }, []);
 
-  const fetchBookings = async () => {
-    const res = await api.get("/phieuthue");
-    setBookings(res.data);
-  };
-
-  const fetchRooms = async () => {
-    const res = await api.get("/phong");
-    setRooms(res.data.filter((r) => r.TinhTrang === "Trống"));
-  };
-
-  const fetchGuestTypes = async () => {
-    const res = await api.get("/loaikhach");
-    setGuestTypes(res.data);
-  };
-
-  const fetchSoKhachMax = async () => {
-    const res = await api.get("/thamso/sokhachMax");
-    setSoKhachToiDa(res.data.soKhachToiDa);
-  };
-
-  /* =====================
-     HANDLER
-  ===================== */
-  const openModal = () => {
-    setForm(emptyForm);
-    setKhachList([{ ...emptyKhach }]);
-    setIsModalOpen(true);
-  };
-
-  const closeModal = () => setIsModalOpen(false);
-
-  const handleFormChange = (e) =>
-    setForm({ ...form, [e.target.name]: e.target.value });
-
-  const handleKhachChange = (index, field, value) => {
-    const newList = [...khachList];
-    newList[index][field] = value;
-    setKhachList(newList);
-  };
-
-  const addKhach = () => {
-    if (khachList.length >= soKhachToiDa) return;
-    setKhachList([...khachList, { ...emptyKhach }]);
-  };
-
-  const removeKhach = (index) => {
-    if (khachList.length === 1) return;
-    setKhachList(khachList.filter((_, i) => i !== index));
-  };
-
-  const handleSubmit = async () => {
-    if (khachList.length > soKhachToiDa) {
-      alert("❌ Vượt quá số khách tối đa");
-      return;
-    }
-
-    setLoading(true);
+  const fetchData = async () => {
     try {
-      await api.post("/phieuthue", {
-        ...form,
-        danhSachKhach: khachList,
-      });
-      alert("✅ Lập phiếu thuê thành công");
-      closeModal();
-      fetchBookings();
-      fetchRooms();
-    } catch (err) {
-      alert("❌ " + (err.response?.data?.message || "Lỗi tạo phiếu"));
-    } finally {
-      setLoading(false);
+      const [bRes, rRes, gRes, maxRes] = await Promise.all([
+        api.get("/phieuthue"),
+        api.get("/phong"),
+        api.get("/loaikhach"),
+        api.get("/thamso/sokhachMax"),
+      ]);
+      setBookings(bRes.data);
+      setRooms(rRes.data.filter((r) => r.TinhTrang === "Trống"));
+      setGuestTypes(gRes.data);
+      setSoKhachToiDa(maxRes.data.soKhachToiDa);
+    } catch (error) {
+      console.error("Lỗi tải dữ liệu:", error);
     }
   };
 
+  const formatInputDate = (dateStr) => {
+    if (!dateStr) return "";
+    const d = new Date(dateStr);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
   /* =====================
-     FORMAT DATE
+      HELPER XỬ LÝ DỮ LIỆU & LỌC
   ===================== */
+  const processBookings = () => {
+    // 1. GOM NHÓM DỮ LIỆU
+    const map = {};
+    bookings.forEach((b) => {
+      if (!map[b.SoPhieu]) {
+        map[b.SoPhieu] = {
+          ...b,
+          khachListDetail: [
+            {
+              MaKH: b.MaKH,
+              HoTen: b.HoTen,
+              CMND: b.CMND,
+              SDT: b.SDT,
+              DiaChi: b.DiaChi,
+              MaLoaiKhach: b.MaLoaiKhach || "",
+            },
+          ],
+          khachListNames: [b.HoTen],
+        };
+      } else {
+        if (!map[b.SoPhieu].khachListDetail.find((k) => k.MaKH === b.MaKH)) {
+          map[b.SoPhieu].khachListDetail.push({
+            MaKH: b.MaKH,
+            HoTen: b.HoTen,
+            CMND: b.CMND,
+            SDT: b.SDT,
+            DiaChi: b.DiaChi,
+            MaLoaiKhach: b.MaLoaiKhach || "",
+          });
+          map[b.SoPhieu].khachListNames.push(b.HoTen);
+        }
+      }
+    });
+
+    let result = Object.values(map);
+
+    // 2. SẮP XẾP
+    result.sort((a, b) => new Date(b.NgayBatDauThue) - new Date(a.NgayBatDauThue));
+
+    // 3. LỌC: TÌM KIẾM
+    if (searchTerm) {
+      const lowerTerm = searchTerm.toLowerCase();
+      result = result.filter(
+        (b) =>
+          String(b.SoPhieu).toLowerCase().includes(lowerTerm) ||
+          String(b.TenPhong).toLowerCase().includes(lowerTerm) ||
+          b.khachListNames.some((name) => String(name).toLowerCase().includes(lowerTerm))
+      );
+    }
+
+    // 4. LỌC: THEO TAB
+    if (filterStatus === "DANG_THUE") {
+      result = result.filter((b) => b.TrangThaiLuuTru === "DANG_THUE");
+    } else if (filterStatus === "DA_TRA_PHONG") {
+      result = result.filter(
+        (b) => b.TrangThaiLuuTru === "DA_TRA_PHONG" || b.TrangThaiLuuTru === "DA_THANH_TOAN"
+      );
+    } else if (filterStatus === "DA_HUY") {
+      result = result.filter((b) => b.TrangThaiLuuTru === "DA_HUY");
+    }
+
+    // 5. LỌC: THEO NGÀY
+    if (filterDateFrom) {
+      result = result.filter((b) => formatInputDate(b.NgayBatDauThue) >= filterDateFrom);
+    }
+    if (filterDateTo) {
+      result = result.filter((b) => formatInputDate(b.NgayBatDauThue) <= filterDateTo);
+    }
+
+    return result;
+  };
+
   const formatDate = (dateStr) => {
     if (!dateStr) return "";
     const date = new Date(dateStr);
@@ -125,39 +173,13 @@ const BookingManagement = () => {
     return `${day}/${month}/${year}`;
   };
 
-  const getTrangThai = (booking) => {
-    // Nếu có trạng thái từ API thì dùng, không thì tự tính
-    if (booking.TrangThai) {
-      return booking.TrangThai;
-    }
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const ngayBatDau = new Date(booking.NgayBatDauThue);
-    ngayBatDau.setHours(0, 0, 0, 0);
-
-    const ngayTra = new Date(booking.NgayDuKienTra);
-    ngayTra.setHours(0, 0, 0, 0);
-
-    if (today < ngayBatDau) {
-      return "CHUA_CHECKIN";
-    } else if (today >= ngayBatDau && today <= ngayTra) {
-      return "DANG_THUE";
-    } else {
-      return "DA_TRA";
-    }
-  };
-
   const renderTrangThai = (trangThai) => {
     const statusMap = {
-      CHUA_CHECKIN: { icon: "🟡", text: "Chưa check-in", color: "#f59e0b" },
       DANG_THUE: { icon: "🟢", text: "Đang thuê", color: "#10b981" },
-      DA_TRA: { icon: "🔵", text: "Đã trả phòng", color: "#3b82f6" },
-      DA_THANH_TOAN: { icon: "✅", text: "Đã thanh toán", color: "#8b5cf6" },
+      DA_TRA_PHONG: { icon: "✅", text: "Đã trả phòng", color: "#3b82f6" },
+      DA_THANH_TOAN: { icon: "💰", text: "Đã thanh toán", color: "#2563eb" },
       DA_HUY: { icon: "🔴", text: "Đã hủy", color: "#ef4444" },
     };
-
     const status = statusMap[trangThai] || statusMap.DANG_THUE;
 
     return (
@@ -175,86 +197,211 @@ const BookingManagement = () => {
   };
 
   /* =====================
-     ACTIONS HANDLER
+      HANDLER MODAL & FORM
   ===================== */
-  const handleViewDetail = (booking) => {
-    alert(`Xem chi tiết phiếu: ${booking.SoPhieu}`);
-    // TODO: Mở modal hiển thị chi tiết
+  const openModalCreate = () => {
+    setModalMode("create");
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    const todayStr = `${year}-${month}-${day}`;
+
+    setForm({
+      ...emptyForm,
+      NgayBatDauThue: todayStr,
+    });
+    setKhachList([{ ...emptyKhach }]);
+    setIsModalOpen(true);
   };
 
-  const handleEdit = (booking) => {
-    const trangThai = getTrangThai(booking);
-    if (trangThai === "DA_THANH_TOAN") {
-      alert("❌ Không thể sửa phiếu đã thanh toán");
-      return;
-    }
-    alert(`Sửa phiếu: ${booking.SoPhieu}`);
-    // TODO: Mở modal chỉnh sửa
+  const openModalEdit = (booking) => {
+    setModalMode("edit");
+    setSelectedPhieu(booking.SoPhieu);
+
+    setForm({
+      MaPhong: booking.MaPhong,
+      NgayBatDauThue: formatInputDate(booking.NgayBatDauThue),
+      NgayDuKienTra: formatInputDate(booking.NgayDuKienTra),
+      GhiChu: booking.GhiChu || "",
+    });
+
+    const details = booking.khachListDetail.map((k) => ({ ...k }));
+    setKhachList(details);
+    setInitialGuestCount(details.length);
+    setIsModalOpen(true);
   };
 
-  const handleDelete = async (booking) => {
-    const trangThai = getTrangThai(booking);
-    if (trangThai === "DA_THANH_TOAN") {
-      alert("❌ Không thể xóa phiếu đã thanh toán");
-      return;
-    }
-
-    if (!window.confirm(`Bạn có chắc muốn xóa phiếu ${booking.SoPhieu}?`)) {
-      return;
-    }
-
-    try {
-      await api.delete(`/phieuthue/${booking.SoPhieu}`);
-      alert("✅ Xóa phiếu thành công");
-      fetchBookings();
-      fetchRooms();
-    } catch (err) {
-      alert("❌ " + (err.response?.data?.message || "Lỗi xóa phiếu"));
-    }
+  const openModalView = (booking) => {
+    setModalMode("view");
+    setForm({
+      MaPhong: booking.TenPhong,
+      NgayBatDauThue: formatInputDate(booking.NgayBatDauThue),
+      NgayDuKienTra: formatInputDate(booking.NgayDuKienTra),
+      GhiChu: booking.GhiChu || "Không có ghi chú",
+    });
+    setKhachList(booking.khachListDetail);
+    setIsModalOpen(true);
   };
 
-  const handleCancel = async (booking) => {
-    const trangThai = getTrangThai(booking);
-    if (trangThai === "DA_THANH_TOAN") {
-      alert("❌ Không thể hủy phiếu đã thanh toán");
-      return;
-    }
+  const closeModal = () => setIsModalOpen(false);
 
-    if (trangThai === "DA_HUY") {
-      alert("ℹ️ Phiếu này đã được hủy trước đó");
+  const handleFormChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+
+  const handleKhachChange = (index, field, value) => {
+    const newList = [...khachList];
+    newList[index][field] = value;
+    setKhachList(newList);
+  };
+
+  // ✅ DELETE: chỉ Admin được xóa
+  const handleDelete = async (soPhieu) => {
+    if (!isAdmin) {
+      alert("❌ Bạn không có quyền xóa phiếu thuê!");
       return;
     }
 
     if (
       !window.confirm(
-        `Bạn có chắc muốn HỦY phiếu ${booking.SoPhieu}?\n\nPhiếu sẽ không bị xóa nhưng sẽ đánh dấu là "Đã hủy" để lưu lịch sử.`
+        `⚠️ CẢNH BÁO: Bạn có chắc muốn xóa phiếu thuê ${soPhieu}?\nDữ liệu khách hàng trong phiếu này cũng sẽ bị xóa.`
       )
     ) {
       return;
     }
 
     try {
-      await api.put(`/phieuthue/${booking.SoPhieu}/huy`);
-      alert("✅ Hủy phiếu thành công");
-      fetchBookings();
-      fetchRooms();
-    } catch (err) {
-      alert("❌ " + (err.response?.data?.message || "Lỗi hủy phiếu"));
+      setLoading(true);
+      await api.delete(`/phieuthue/${soPhieu}`);
+      alert("✅ Xóa phiếu thuê thành công!");
+      fetchData();
+    } catch (error) {
+      const msg = error.response?.data?.message || "Lỗi khi xóa phiếu.";
+      alert("❌ " + msg);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handlePayment = (booking) => {
-    const trangThai = getTrangThai(booking);
-    if (trangThai === "DA_THANH_TOAN") {
-      alert("✅ Phiếu này đã được thanh toán");
+  const addKhach = () => {
+    if (khachList.length >= soKhachToiDa) return;
+    setKhachList([...khachList, { ...emptyKhach }]);
+  };
+
+  const removeKhach = (index) => {
+    if (khachList.length === 1) return;
+    setKhachList(khachList.filter((_, i) => i !== index));
+  };
+
+  const handleSubmit = async () => {
+    if (modalMode === "view") {
+      closeModal();
       return;
     }
-    alert(`Thanh toán phiếu: ${booking.SoPhieu}`);
-    // TODO: Chuyển đến trang thanh toán/tạo hóa đơn
+
+    // Validate
+    for (let i = 0; i < khachList.length; i++) {
+      const k = khachList[i];
+      if (!k.HoTen || !k.HoTen.trim()) {
+        alert(`❌ Khách hàng #${i + 1} chưa nhập tên!`);
+        return;
+      }
+      if (!k.MaLoaiKhach) {
+        alert(`❌ Khách hàng #${i + 1} chưa chọn Loại khách!`);
+        return;
+      }
+    }
+
+    const ngayDen = new Date(form.NgayBatDauThue);
+    const ngayTra = new Date(form.NgayDuKienTra);
+
+    if (ngayTra <= ngayDen) {
+      return alert("❌ Ngày dự kiến trả phải SAU ngày bắt đầu thuê!");
+    }
+
+    const currentCount = khachList.length;
+    if (modalMode === "create") {
+      if (currentCount > soKhachToiDa) {
+        alert(`❌ Quy định hiện tại chỉ cho phép tối đa ${soKhachToiDa} khách/phòng.`);
+        return;
+      }
+    } else if (modalMode === "edit") {
+      if (currentCount > initialGuestCount && currentCount > soKhachToiDa) {
+        alert(`❌ Không thể thêm người! Quy định tối đa ${soKhachToiDa} khách.`);
+        return;
+      }
+    }
+
+    setLoading(true);
+    try {
+      if (modalMode === "create") {
+        await api.post("/phieuthue", { ...form, danhSachKhach: khachList });
+        alert("✅ Lập phiếu thuê thành công");
+      } else if (modalMode === "edit") {
+        await api.put(`/phieuthue/${selectedPhieu}`, {
+          NgayDuKienTra: form.NgayDuKienTra,
+          GhiChu: form.GhiChu,
+          danhSachKhach: khachList,
+        });
+        alert("✅ Cập nhật phiếu thành công");
+      }
+      closeModal();
+      fetchData();
+    } catch (err) {
+      alert("❌ " + (err.response?.data?.message || "Lỗi xử lý"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAction = async (action, booking) => {
+    const msg = `Xác nhận HỦY phiếu ${booking.SoPhieu}?`;
+    if (!window.confirm(msg)) return;
+    try {
+      await api.put(`/phieuthue/${booking.SoPhieu}/huy`);
+      alert("✅ Thao tác thành công!");
+      fetchData();
+    } catch (err) {
+      alert("❌ Lỗi: " + (err.response?.data?.message || err.message));
+    }
+  };
+
+  const handleCheckoutClick = async (booking) => {
+    try {
+      const res = await api.get(`/hoadon/preview/${booking.SoPhieu}`);
+      setBillPreview(res.data);
+      setTienKhachDua("");
+      setIsCheckoutModalOpen(true);
+    } catch (err) {
+      alert("Lỗi tính tiền: " + (err.response?.data?.message || err.message));
+    }
+  };
+
+  const handleConfirmPayment = async () => {
+    if (!billPreview) return;
+    const tienDua = Number(tienKhachDua);
+    if (tienDua < billPreview.ThanhTien) {
+      alert("⚠️ Tiền khách đưa chưa đủ!");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await api.post("/hoadon/pay", {
+        soPhieu: billPreview.SoPhieu,
+        tienKhachDua: tienDua,
+      });
+      alert("✅ Thanh toán & Trả phòng thành công!");
+      setIsCheckoutModalOpen(false);
+      fetchData();
+    } catch (err) {
+      alert("❌ Lỗi thanh toán: " + (err.response?.data?.message || err.message));
+    } finally {
+      setLoading(false);
+    }
   };
 
   /* =====================
-     RENDER
+      RENDER
   ===================== */
   return (
     <div style={styles.wrapper}>
@@ -262,14 +409,111 @@ const BookingManagement = () => {
         <div style={styles.header}>
           <div>
             <h1 style={styles.title}>📋 Quản lý phiếu thuê phòng</h1>
-            <p style={styles.subtitle}>
-              Quản lý và theo dõi các phiếu thuê phòng khách sạn
-            </p>
+            <p style={styles.subtitle}>Quản lý và theo dõi các phiếu thuê phòng khách sạn</p>
           </div>
-          <button style={styles.addBtn} onClick={openModal}>
+          <button style={styles.addBtn} onClick={openModalCreate}>
             <span style={styles.btnIcon}>+</span>
             <span>Tạo phiếu thuê mới</span>
           </button>
+        </div>
+
+        {/* TOOLBAR */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "15px", marginBottom: "20px" }}>
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: "10px" }}>
+            {[
+              { key: "ALL", label: "Tất cả" },
+              { key: "DANG_THUE", label: "🟢 Đang ở" },
+              { key: "DA_TRA_PHONG", label: "✅ Đã trả" },
+              { key: "DA_HUY", label: "🔴 Đã hủy" },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setFilterStatus(tab.key)}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: "8px",
+                  border: "none",
+                  cursor: "pointer",
+                  fontWeight: "600",
+                  background: filterStatus === tab.key ? "#3b82f6" : "#fff",
+                  color: filterStatus === tab.key ? "#fff" : "#64748b",
+                  boxShadow:
+                    filterStatus === tab.key
+                      ? "0 2px 5px rgba(59, 130, 246, 0.3)"
+                      : "0 1px 2px rgba(0,0,0,0.05)",
+                  transition: "all 0.2s",
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Date + Search */}
+          <div
+            style={{
+              display: "flex",
+              gap: "10px",
+              flexWrap: "wrap",
+              alignItems: "center",
+              background: "#fff",
+              padding: "10px",
+              borderRadius: "12px",
+              boxShadow: "0 2px 5px rgba(0,0,0,0.05)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+              <span style={{ fontSize: "14px", fontWeight: 600, color: "#64748b" }}>Từ ngày:</span>
+              <input
+                type="date"
+                value={filterDateFrom}
+                onChange={(e) => setFilterDateFrom(e.target.value)}
+                style={styles.inputSearch}
+              />
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+              <span style={{ fontSize: "14px", fontWeight: 600, color: "#64748b" }}>Đến ngày:</span>
+              <input
+                type="date"
+                value={filterDateTo}
+                onChange={(e) => setFilterDateTo(e.target.value)}
+                style={styles.inputSearch}
+              />
+            </div>
+
+            <div style={{ flex: 1 }} />
+
+            <input
+              type="text"
+              placeholder="🔍 Tìm phiếu, phòng, khách..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{ ...styles.inputSearch, width: "300px" }}
+            />
+
+            {(filterDateFrom || filterDateTo || searchTerm) && (
+              <button
+                onClick={() => {
+                  setFilterDateFrom("");
+                  setFilterDateTo("");
+                  setSearchTerm("");
+                }}
+                style={{
+                  background: "#f1f5f9",
+                  border: "none",
+                  padding: "8px 12px",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  color: "#64748b",
+                }}
+                title="Xóa bộ lọc"
+              >
+                🔄
+              </button>
+            )}
+          </div>
         </div>
 
         {/* TABLE */}
@@ -287,18 +531,16 @@ const BookingManagement = () => {
               </tr>
             </thead>
             <tbody>
-              {Object.values(
-                bookings.reduce((acc, b) => {
-                  if (!acc[b.SoPhieu]) {
-                    acc[b.SoPhieu] = { ...b, khachList: [b.HoTen] };
-                  } else {
-                    acc[b.SoPhieu].khachList.push(b.HoTen);
-                  }
-                  return acc;
-                }, {})
-              ).map((b, idx) => {
-                const trangThai = getTrangThai(b);
-                const isDisabled = trangThai === "DA_THANH_TOAN";
+              {processBookings().map((b, idx) => {
+                const trangThai = b.TrangThaiLuuTru || "DANG_THUE";
+                const isDangThue = trangThai === "DANG_THUE";
+
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                const startDate = new Date(b.NgayBatDauThue);
+                startDate.setHours(0,0,0,0);
+
+                const isFuture = startDate > today;
 
                 return (
                   <tr
@@ -316,9 +558,9 @@ const BookingManagement = () => {
                     </td>
                     <td style={styles.td}>
                       <div>
-                        {b.khachList.map((khach, i) => (
+                        {b.khachListNames.map((name, i) => (
                           <div key={i} style={{ marginBottom: 4 }}>
-                            {khach}
+                            {name}
                           </div>
                         ))}
                         <span
@@ -330,78 +572,74 @@ const BookingManagement = () => {
                             display: "block",
                           }}
                         >
-                          ({b.khachList.length} khách)
+                          ({b.khachListNames.length} khách)
                         </span>
                       </div>
                     </td>
                     <td style={styles.td}>
-                      <span style={styles.date}>
-                        {formatDate(b.NgayBatDauThue)}
-                      </span>
+                      <span style={styles.date}>{formatDate(b.NgayBatDauThue)}</span>
                     </td>
                     <td style={styles.td}>
-                      <span style={styles.date}>
-                        {formatDate(b.NgayDuKienTra)}
-                      </span>
+                      <span style={styles.date}>{formatDate(b.NgayDuKienTra)}</span>
                     </td>
                     <td style={styles.td}>{renderTrangThai(trangThai)}</td>
                     <td style={styles.tdActions}>
                       <div style={styles.actionButtons}>
-                        <button
-                          style={styles.actionBtn}
-                          onClick={() => handleViewDetail(b)}
-                          title="Xem chi tiết"
-                        >
-                          👁️
+                        <button style={styles.actionBtn} onClick={() => openModalView(b)} title="Xem chi tiết">
+                          Xem
                         </button>
-                        <button
-                          style={{
-                            ...styles.actionBtn,
-                            ...(isDisabled ? styles.actionBtnDisabled : {}),
-                          }}
-                          onClick={() => handleEdit(b)}
-                          disabled={isDisabled}
-                          title="Sửa"
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          style={{
-                            ...styles.actionBtn,
-                            background: "#fee2e2",
-                            ...(isDisabled ? styles.actionBtnDisabled : {}),
-                          }}
-                          onClick={() => handleCancel(b)}
-                          disabled={isDisabled}
-                          title="Hủy phiếu"
-                        >
-                          ❌
-                        </button>
-                        <button
-                          style={{
-                            ...styles.actionBtn,
-                            background: "#fef3c7",
-                            ...(isDisabled ? styles.actionBtnDisabled : {}),
-                          }}
-                          onClick={() => handleDelete(b)}
-                          disabled={isDisabled}
-                          title="Xóa"
-                        >
-                          🗑️
-                        </button>
-                        <button
-                          style={{
-                            ...styles.actionBtn,
-                            background:
-                              trangThai === "DA_THANH_TOAN"
-                                ? "#e0e7ff"
-                                : "#dcfce7",
-                          }}
-                          onClick={() => handlePayment(b)}
-                          title="Thanh toán"
-                        >
-                          💰
-                        </button>
+
+                        {isDangThue && (
+                          <button style={styles.actionBtn} onClick={() => openModalEdit(b)} title="Sửa phiếu">
+                            Sửa
+                          </button>
+                        )}
+
+                        {isDangThue && !isFuture && (
+                          <button
+                            style={{
+                              ...styles.actionBtn,
+                              background: "#dbeafe",
+                              color: "#2563eb",
+                              borderColor: "#bfdbfe",
+                            }}
+                            onClick={() => handleCheckoutClick(b)}
+                            title="Trả phòng & Thanh toán"
+                          >
+                            💵 Trả phòng
+                          </button>
+                        )}
+
+                        {isDangThue && (
+                          <button
+                            style={{
+                              ...styles.actionBtn,
+                              background: "#fee2e2",
+                              color: "#ef4444",
+                              borderColor: "#fecaca",
+                            }}
+                            onClick={() => handleAction("cancel", b)}
+                            title="Hủy phiếu"
+                          >
+                            Hủy
+                          </button>
+                        )}
+
+                        {/* ✅ CHỈ ADMIN MỚI THẤY NÚT XÓA */}
+                        {!isDangThue && isAdmin && (
+                          <button
+                            style={{
+                              ...styles.actionBtn,
+                              borderColor: "#ef4444",
+                              color: "#ef4444",
+                              background: "#fee2e2",
+                            }}
+                            onClick={() => handleDelete(b.SoPhieu)}
+                            title="Xóa phiếu thuê"
+                          >
+                            🗑️ Xóa
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -411,12 +649,16 @@ const BookingManagement = () => {
           </table>
         </div>
 
-        {/* MODAL */}
+        {/* MODAL EDIT/CREATE/VIEW */}
         {isModalOpen && (
           <div style={styles.overlay} onClick={closeModal}>
             <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
               <div style={styles.modalHeader}>
-                <h2 style={styles.modalTitle}>✨ Tạo phiếu thuê phòng mới</h2>
+                <h2 style={styles.modalTitle}>
+                  {modalMode === "create" && "✨ Tạo phiếu thuê phòng mới"}
+                  {modalMode === "edit" && "✏️ Sửa thông tin phiếu thuê"}
+                  {modalMode === "view" && "ℹ️ Chi tiết phiếu thuê"}
+                </h2>
                 <button style={styles.closeBtn} onClick={closeModal}>
                   ✕
                 </button>
@@ -425,18 +667,18 @@ const BookingManagement = () => {
               <div style={styles.form}>
                 <div style={styles.formGroup}>
                   <label style={styles.label}>Phòng</label>
-                  <select
-                    name="MaPhong"
-                    onChange={handleFormChange}
-                    style={styles.select}
-                  >
-                    <option value="">-- Chọn phòng trống --</option>
-                    {rooms.map((r) => (
-                      <option key={r.MaPhong} value={r.MaPhong}>
-                        🚪 {r.TenPhong}
-                      </option>
-                    ))}
-                  </select>
+                  {modalMode === "create" ? (
+                    <select name="MaPhong" onChange={handleFormChange} style={styles.select} value={form.MaPhong}>
+                      <option value="">-- Chọn phòng trống --</option>
+                      {rooms.map((r) => (
+                        <option key={r.MaPhong} value={r.MaPhong}>
+                          🚪 {r.TenPhong}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input style={{ ...styles.input, background: "#f3f4f6" }} value={form.MaPhong} disabled />
+                  )}
                 </div>
 
                 <div style={styles.dateGroup}>
@@ -445,8 +687,10 @@ const BookingManagement = () => {
                     <input
                       type="date"
                       name="NgayBatDauThue"
+                      value={form.NgayBatDauThue}
                       onChange={handleFormChange}
                       style={styles.input}
+                      disabled={modalMode !== "create"}
                     />
                   </div>
                   <div style={styles.formGroup}>
@@ -454,10 +698,25 @@ const BookingManagement = () => {
                     <input
                       type="date"
                       name="NgayDuKienTra"
+                      value={form.NgayDuKienTra}
                       onChange={handleFormChange}
                       style={styles.input}
+                      disabled={modalMode === "view"}
                     />
                   </div>
+                </div>
+
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>Ghi chú</label>
+                  <input
+                    type="text"
+                    name="GhiChu"
+                    value={form.GhiChu}
+                    onChange={handleFormChange}
+                    style={styles.input}
+                    placeholder="Ghi chú thêm..."
+                    disabled={modalMode === "view"}
+                  />
                 </div>
 
                 <div style={styles.guestSection}>
@@ -471,14 +730,9 @@ const BookingManagement = () => {
                   {khachList.map((k, index) => (
                     <div key={index} style={styles.khachBox}>
                       <div style={styles.khachHeader}>
-                        <span style={styles.khachNumber}>
-                          Khách #{index + 1}
-                        </span>
-                        {khachList.length > 1 && (
-                          <button
-                            style={styles.removeBtn}
-                            onClick={() => removeKhach(index)}
-                          >
+                        <span style={styles.khachNumber}>Khách #{index + 1}</span>
+                        {modalMode !== "view" && khachList.length > 1 && (
+                          <button style={styles.removeBtn} onClick={() => removeKhach(index)}>
                             🗑️ Xóa
                           </button>
                         )}
@@ -490,33 +744,34 @@ const BookingManagement = () => {
                           <input
                             placeholder="Nhập họ tên"
                             value={k.HoTen}
-                            onChange={(e) =>
-                              handleKhachChange(index, "HoTen", e.target.value)
-                            }
+                            onChange={(e) => handleKhachChange(index, "HoTen", e.target.value)}
                             style={styles.input}
+                            disabled={modalMode === "view"}
                           />
                         </div>
 
                         <div style={styles.formGroup}>
                           <label style={styles.labelSmall}>Loại khách *</label>
-                          <select
-                            value={k.MaLoaiKhach}
-                            onChange={(e) =>
-                              handleKhachChange(
-                                index,
-                                "MaLoaiKhach",
-                                e.target.value
-                              )
-                            }
-                            style={styles.select}
-                          >
-                            <option value="">-- Chọn loại --</option>
-                            {guestTypes.map((g) => (
-                              <option key={g.MaLoaiKhach} value={g.MaLoaiKhach}>
-                                {g.TenLoaiKhach}
-                              </option>
-                            ))}
-                          </select>
+                          {modalMode === "create" || modalMode === "edit" ? (
+                            <select
+                              value={k.MaLoaiKhach}
+                              onChange={(e) => handleKhachChange(index, "MaLoaiKhach", e.target.value)}
+                              style={styles.select}
+                            >
+                              <option value="">-- Chọn loại --</option>
+                              {guestTypes.map((g) => (
+                                <option key={g.MaLoaiKhach} value={g.MaLoaiKhach}>
+                                  {g.TenLoaiKhach}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              style={{ ...styles.input, background: "#f3f4f6" }}
+                              value={guestTypes.find((g) => g.MaLoaiKhach === k.MaLoaiKhach)?.TenLoaiKhach || k.MaLoaiKhach}
+                              disabled
+                            />
+                          )}
                         </div>
 
                         <div style={styles.formGroup}>
@@ -524,10 +779,9 @@ const BookingManagement = () => {
                           <input
                             placeholder="Số CCCD"
                             value={k.CMND}
-                            onChange={(e) =>
-                              handleKhachChange(index, "CMND", e.target.value)
-                            }
+                            onChange={(e) => handleKhachChange(index, "CMND", e.target.value)}
                             style={styles.input}
+                            disabled={modalMode === "view"}
                           />
                         </div>
 
@@ -536,10 +790,9 @@ const BookingManagement = () => {
                           <input
                             placeholder="Địa chỉ liên hệ"
                             value={k.DiaChi}
-                            onChange={(e) =>
-                              handleKhachChange(index, "DiaChi", e.target.value)
-                            }
+                            onChange={(e) => handleKhachChange(index, "DiaChi", e.target.value)}
                             style={styles.input}
+                            disabled={modalMode === "view"}
                           />
                         </div>
 
@@ -548,42 +801,350 @@ const BookingManagement = () => {
                           <input
                             placeholder="Số điện thoại"
                             value={k.SDT}
-                            onChange={(e) =>
-                              handleKhachChange(index, "SDT", e.target.value)
-                            }
+                            onChange={(e) => handleKhachChange(index, "SDT", e.target.value)}
                             style={styles.input}
+                            disabled={modalMode === "view"}
                           />
                         </div>
                       </div>
                     </div>
                   ))}
 
-                  <button
-                    onClick={addKhach}
-                    disabled={khachList.length >= soKhachToiDa}
-                    style={{
-                      ...styles.addGuestBtn,
-                      ...(khachList.length >= soKhachToiDa
-                        ? styles.addGuestBtnDisabled
-                        : {}),
-                    }}
-                  >
-                    ➕ Thêm khách hàng
-                  </button>
+                  {modalMode !== "view" && (
+                    <button
+                      onClick={addKhach}
+                      disabled={khachList.length >= soKhachToiDa}
+                      style={{
+                        ...styles.addGuestBtn,
+                        ...(khachList.length >= soKhachToiDa ? styles.addGuestBtnDisabled : {}),
+                      }}
+                    >
+                      ➕ Thêm khách hàng
+                    </button>
+                  )}
                 </div>
               </div>
 
               <div style={styles.actions}>
                 <button style={styles.cancelBtn} onClick={closeModal}>
-                  Hủy bỏ
+                  {modalMode === "view" ? "Đóng" : "Hủy bỏ"}
                 </button>
-                <button
-                  style={styles.submitBtn}
-                  onClick={handleSubmit}
-                  disabled={loading}
+                {modalMode !== "view" && (
+                  <button style={styles.submitBtn} onClick={handleSubmit} disabled={loading}>
+                    {loading ? "⏳ Đang lưu..." : "💾 Lưu thay đổi"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* CHECKOUT MODAL */}
+        {isCheckoutModalOpen && billPreview && (
+          <div style={styles.overlay} onClick={() => setIsCheckoutModalOpen(false)}>
+            <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+              <div
+                style={{
+                  ...styles.modalHeader,
+                  background: "#f8fafc",
+                  borderBottom: "1px solid #e2e8f0",
+                }}
+              >
+                <h2
+                  style={{
+                    ...styles.modalTitle,
+                    color: "#1e293b",
+                    fontSize: "20px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                  }}
                 >
-                  {loading ? "⏳ Đang lưu..." : "💾 Lưu phiếu thuê"}
+                  🧾 Hóa Đơn Thanh Toán
+                </h2>
+                <button style={styles.closeBtn} onClick={() => setIsCheckoutModalOpen(false)}>
+                  ✕
                 </button>
+              </div>
+
+              <div style={{ padding: "24px" }}>
+                <div
+                  style={{
+                    background: "#fff",
+                    borderRadius: "8px",
+                    marginBottom: "20px",
+                    border: "1px solid #e2e8f0",
+                    display: "grid",
+                    gridTemplateColumns: "1.5fr 1fr",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div style={{ padding: "16px", borderRight: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "13px", color: "#64748b", marginBottom: "4px" }}>
+                      Phòng & Loại phòng
+                    </div>
+                    <div style={{ fontSize: "18px", fontWeight: "bold", color: "#2563eb" }}>
+                      {billPreview.TenPhong}
+                      <span
+                        style={{
+                          fontSize: "14px",
+                          fontWeight: "normal",
+                          color: "#475569",
+                          marginLeft: "8px",
+                        }}
+                      >
+                        ({billPreview.TenLoaiPhong})
+                      </span>
+                    </div>
+                    <div style={{ fontSize: "13px", color: "#64748b", marginTop: "8px" }}>Khách đại diện</div>
+                    <div style={{ fontWeight: "600", color: "#334155" }}>{billPreview.TenKhachDaiDien}</div>
+                  </div>
+                  <div style={{ padding: "16px", background: "#f8fafc" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontSize: "13px" }}>Số phiếu:</span>
+                      <strong style={{ color: "#334155" }}>{billPreview.SoPhieu}</strong>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#64748b", fontSize: "13px" }}>Ngày lập:</span>
+                      <strong style={{ color: "#334155" }}>{new Date().toLocaleDateString("vi-VN")}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <table style={{ width: "100%", marginBottom: "24px", borderCollapse: "collapse", fontSize: "14px" }}>
+                  <thead>
+                    <tr
+                      style={{
+                        background: "#f1f5f9",
+                        color: "#475569",
+                        textTransform: "uppercase",
+                        fontSize: "11px",
+                        letterSpacing: "0.5px",
+                      }}
+                    >
+                      <th style={{ padding: "12px", textAlign: "left" }}>Khoản mục</th>
+                      <th style={{ padding: "12px", textAlign: "right" }}>Chi tiết</th>
+                      <th style={{ padding: "12px", textAlign: "right" }}>Thành tiền</th>
+                    </tr>
+                  </thead>
+                  <tbody style={{ borderTop: "1px solid #e2e8f0" }}>
+                    {(() => {
+                      const tienPhong = billPreview.DonGia * billPreview.SoNgay;
+                      const tienPhuThu = tienPhong * billPreview.TiLePhuThu;
+                      const tienKhachNN = (tienPhong + tienPhuThu) * (billPreview.HeSoKhach - 1);
+                      const khachVuot = billPreview.SoKhach - (billPreview.SoKhachKhongTinhPhuThu || 2);
+
+                      return (
+                        <>
+                          <tr>
+                            <td style={{ padding: "12px", borderBottom: "1px dashed #e2e8f0" }}>
+                              <strong>Tiền thuê phòng</strong>
+                              <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
+                                Đơn giá: {Number(billPreview.DonGia).toLocaleString()} đ/ngày
+                              </div>
+                            </td>
+                            <td style={{ padding: "12px", textAlign: "right", borderBottom: "1px dashed #e2e8f0" }}>
+                              {billPreview.SoNgay} ngày
+                            </td>
+                            <td
+                              style={{
+                                padding: "12px",
+                                textAlign: "right",
+                                fontWeight: "bold",
+                                color: "#334155",
+                                borderBottom: "1px dashed #e2e8f0",
+                              }}
+                            >
+                              {Number(tienPhong).toLocaleString()}
+                            </td>
+                          </tr>
+
+                          {billPreview.TiLePhuThu > 0 && (
+                            <tr style={{ color: "#d97706", background: "#fffbeb" }}>
+                              <td style={{ padding: "12px", borderBottom: "1px dashed #e2e8f0" }}>
+                                Phụ thu quá tải (vượt {khachVuot} khách)
+                              </td>
+                              <td style={{ padding: "12px", textAlign: "right", borderBottom: "1px dashed #e2e8f0" }}>
+                                +{billPreview.TiLePhuThu * 100}%
+                              </td>
+                              <td
+                                style={{
+                                  padding: "12px",
+                                  textAlign: "right",
+                                  fontWeight: "bold",
+                                  borderBottom: "1px dashed #e2e8f0",
+                                }}
+                              >
+                                {Number(tienPhuThu).toLocaleString()}
+                              </td>
+                            </tr>
+                          )}
+
+                          {billPreview.HeSoKhach > 1 && (
+                            <tr style={{ color: "#059669", background: "#f0fdf4" }}>
+                              <td style={{ padding: "12px", borderBottom: "1px dashed #e2e8f0" }}>
+                                Phụ thu khách nước ngoài
+                              </td>
+                              <td style={{ padding: "12px", textAlign: "right", borderBottom: "1px dashed #e2e8f0" }}>
+                                <div style={{ fontWeight: "bold" }}>x {Number(billPreview.HeSoKhach - 1)}</div>
+                                <div style={{ fontSize: "11px", fontStyle: "italic", opacity: 0.8, marginTop: "2px" }}>
+                                  (Tính thêm {(billPreview.HeSoKhach - 1) * 100}% trên tổng tiền phòng & phụ thu)
+                                </div>
+                              </td>
+                              <td
+                                style={{
+                                  padding: "12px",
+                                  textAlign: "right",
+                                  fontWeight: "bold",
+                                  borderBottom: "1px dashed #e2e8f0",
+                                }}
+                              >
+                                {Number(tienKhachNN).toLocaleString()}
+                              </td>
+                            </tr>
+                          )}
+
+                          <tr style={{ borderTop: "2px solid #334155", background: "#fff" }}>
+                            <td
+                              style={{
+                                padding: "16px 12px",
+                                fontWeight: "bold",
+                                fontSize: "15px",
+                                color: "#dc2626",
+                              }}
+                              colSpan={2}
+                            >
+                              TỔNG TIỀN PHẢI TRẢ
+                            </td>
+                            <td
+                              style={{
+                                padding: "16px 12px",
+                                textAlign: "right",
+                                fontWeight: "bold",
+                                fontSize: "18px",
+                                color: "#dc2626",
+                              }}
+                            >
+                              {Number(billPreview.ThanhTien).toLocaleString()} VND
+                            </td>
+                          </tr>
+                        </>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+
+                <div
+                  style={{
+                    background: "#f0f9ff",
+                    padding: "20px",
+                    borderRadius: "12px",
+                    border: "1px solid #bae6fd",
+                    marginBottom: "24px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <label style={{ fontSize: "15px", fontWeight: "bold", color: "#0369a1" }}>💵 KHÁCH ĐƯA:</label>
+
+                    <div style={{ position: "relative", width: "200px" }}>
+                      <input
+                        type="text"
+                        autoFocus
+                        placeholder="0"
+                        style={{
+                          width: "100%",
+                          padding: "10px 50px 10px 15px",
+                          borderRadius: "8px",
+                          border: "2px solid #0ea5e9",
+                          fontSize: "18px",
+                          fontWeight: "bold",
+                          textAlign: "right",
+                          color: "#0284c7",
+                          outline: "none",
+                          boxSizing: "border-box",
+                          background: "#fff",
+                        }}
+                        value={tienKhachDua ? Number(tienKhachDua).toLocaleString("en-US") : ""}
+                        onChange={(e) => {
+                          const rawValue = e.target.value.replace(/,/g, "");
+                          if (!isNaN(rawValue)) setTienKhachDua(rawValue);
+                        }}
+                      />
+                      <span
+                        style={{
+                          position: "absolute",
+                          right: "12px",
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                          fontWeight: "bold",
+                          color: "#94a3b8",
+                          pointerEvents: "none",
+                          fontSize: "14px",
+                        }}
+                      >
+                        VND
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: "15px",
+                      paddingTop: "15px",
+                      borderTop: "1px dashed #cbd5e1",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span style={{ fontSize: "14px", fontWeight: "600", color: "#475569" }}>Tiền thừa trả lại:</span>
+                    <span
+                      style={{
+                        fontSize: "18px",
+                        fontWeight: "bold",
+                        color: Number(tienKhachDua) - billPreview.ThanhTien < 0 ? "#ef4444" : "#16a34a",
+                      }}
+                    >
+                      {tienKhachDua ? (Number(tienKhachDua) - billPreview.ThanhTien).toLocaleString() : 0} VND
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+                  <button
+                    style={{
+                      padding: "10px 20px",
+                      background: "#fff",
+                      color: "#64748b",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "8px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      fontSize: "14px",
+                    }}
+                    onClick={() => setIsCheckoutModalOpen(false)}
+                  >
+                    Hủy bỏ
+                  </button>
+                  <button
+                    style={{
+                      padding: "10px 24px",
+                      background: "#2563eb",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "8px",
+                      fontWeight: "bold",
+                      cursor: Number(tienKhachDua) < billPreview.ThanhTien ? "not-allowed" : "pointer",
+                      opacity: Number(tienKhachDua) < billPreview.ThanhTien ? 0.6 : 1,
+                      boxShadow: "0 4px 6px -1px rgba(37, 99, 235, 0.4)",
+                      fontSize: "14px",
+                    }}
+                    onClick={handleConfirmPayment}
+                    disabled={Number(tienKhachDua) < billPreview.ThanhTien}
+                  >
+                    ✅ Hoàn thành thanh toán
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -594,7 +1155,7 @@ const BookingManagement = () => {
 };
 
 /* =====================
-   STYLE - SOFT NEUTRAL THEME
+          STYLE
 ===================== */
 const styles = {
   wrapper: {
@@ -715,20 +1276,18 @@ const styles = {
     flexWrap: "wrap",
   },
   actionBtn: {
-    background: "#f1f5f9",
+    background: "#fff",
     border: "1px solid #e2e8f0",
-    borderRadius: 8,
-    padding: "6px 10px",
-    fontSize: 16,
+    borderRadius: 6,
+    padding: "6px 12px",
+    fontSize: 13,
+    fontWeight: 600,
     cursor: "pointer",
     transition: "all 0.2s ease",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-  },
-  actionBtnDisabled: {
-    opacity: 0.4,
-    cursor: "not-allowed",
+    whiteSpace: "nowrap",
   },
   overlay: {
     position: "fixed",
@@ -937,6 +1496,14 @@ const styles = {
     cursor: "pointer",
     boxShadow: "0 4px 12px rgba(66, 153, 225, 0.3)",
     transition: "all 0.2s ease",
+  },
+  inputSearch: {
+    padding: "8px 12px",
+    borderRadius: "6px",
+    border: "1px solid #e2e8f0",
+    outline: "none",
+    fontSize: "14px",
+    color: "#334155",
   },
 };
 

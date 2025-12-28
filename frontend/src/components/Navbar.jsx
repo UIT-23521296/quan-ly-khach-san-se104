@@ -7,9 +7,9 @@ const Navbar = () => {
   // Map vai trò sang tiếng Việt
   const roleDisplay = {
     Admin: "Quản trị viên",
-    QuanLy: "Quản lý",
-    LeTan: "Lễ tân",
-    BanGiamDoc: "Ban giám đốc",
+    Manage: "Quản lý",
+    User: "Lễ tân",
+  
   };
 
   return (

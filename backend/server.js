@@ -21,6 +21,9 @@ const thamSoRoutes = require("./routes/thamSoRoutes");
 const loaiphongRoutes = require("./routes/loaiphongRoutes");
 const phieuthueRoutes = require("./routes/phieuthueRoutes");
 const loaikhachRoutes = require("./routes/loaikhachRoutes");
+const hoadonRoutes = require("./routes/hoadonRoutes");
+const baocaoRoutes = require("./routes/baocaoRoutes");
+const khachhangRoutes = require("./routes/khachhangRoutes");
 
 // ==== SỬ DỤNG ROUTES ====
 app.use("/api/auth", authRoutes);
@@ -29,6 +32,14 @@ app.use("/api/thamso", thamSoRoutes);
 app.use("/api/loaiphong", loaiphongRoutes);
 app.use("/api/phieuthue", phieuthueRoutes);
 app.use("/api/loaikhach", loaikhachRoutes);
+app.use("/api/hoadon", hoadonRoutes);
+app.use("/api/baocao", baocaoRoutes);
+app.use("/api/quidinh", require("./routes/quidinhRoutes"));
+app.use("/api/khachhang", khachhangRoutes);
+app.use("/api/dashboard", require("./routes/dashboardRoutes"));
+app.use("/api/users", require("./routes/userRoutes"));
+app.use("/api/chatbot", require("./routes/chatbot.routes"));
+
 // Test API
 app.get("/api/test", (req, res) => {
   res.json({ message: "Backend đang chạy!" });

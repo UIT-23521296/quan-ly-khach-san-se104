@@ -18,8 +18,8 @@ exports.insertKhachHang = (data) => {
 exports.insertPhieuThue = (data) => {
   const sql = `
     INSERT INTO phieuthue
-    (SoPhieu, MaPhong, NgayBatDauThue, NgayDuKienTra)
-    VALUES (?, ?, ?, ?)
+    (SoPhieu, MaPhong, TenPhong_LuuTru, NgayBatDauThue, NgayDuKienTra, TrangThaiLuuTru, GhiChu)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `;
   return db.promise().query(sql, data);
 };
@@ -50,10 +50,16 @@ exports.getAll = () => {
     SELECT 
       pt.SoPhieu,
       pt.MaPhong,
-      p.TenPhong,
+      COALESCE(pt.TenPhong_LuuTru, p.TenPhong) AS TenPhong,
       pt.NgayBatDauThue,
       pt.NgayDuKienTra,
+      pt.TrangThaiLuuTru,
+      pt.GhiChu,
+      COALESCE(hd.TrangThaiThanhToan, 'CHUA_THANH_TOAN') AS TrangThaiThanhToan,
       kh.HoTen,
+      kh.MaKH,
+      kh.MaLoaiKhach,
+      kh.DiaChi,
       lk.TenLoaiKhach,
       kh.CMND,
       kh.SDT
@@ -62,7 +68,20 @@ exports.getAll = () => {
     JOIN ct_phieuthue ct ON pt.SoPhieu = ct.SoPhieu
     JOIN khachhang kh ON ct.MaKH = kh.MaKH
     JOIN loaikhach lk ON kh.MaLoaiKhach = lk.MaLoaiKhach
+    LEFT JOIN hoadon hd ON pt.SoPhieu = hd.SoPhieu 
     ORDER BY pt.NgayBatDauThue DESC
   `;
   return db.promise().query(sql);
+};
+
+// 6️⃣ Cập nhật phiếu thuê
+exports.updatePhieu = (soPhieu, ngayDuKienTra, ghiChu) => {
+  const sql = `UPDATE phieuthue SET NgayDuKienTra = ?, GhiChu = ? WHERE SoPhieu = ?`;
+  return db.promise().query(sql, [ngayDuKienTra, ghiChu, soPhieu]);
+};
+
+// 7️⃣ Cập nhật thông tin khách hàng
+exports.updateKhachHang = (maKH, hoTen, cmnd, sdt, diaChi, maLoaiKhach) => {
+  const sql = `UPDATE khachhang SET HoTen = ?, CMND = ?, SDT = ?, DiaChi = ?, MaLoaiKhach = ? WHERE MaKH = ?`;
+  return db.promise().query(sql, [hoTen, cmnd, sdt, diaChi, maLoaiKhach, maKH]);
 };

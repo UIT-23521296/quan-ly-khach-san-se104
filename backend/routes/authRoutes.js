@@ -1,59 +1,68 @@
+// backend/routes/authRoutes.js
 const express = require("express");
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const User = require("../models/User");
-
 const router = express.Router();
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
+const db = require("../config/db");
 
-// ĐĂNG NHẬP
-router.post("/login", (req, res) => {
-  const { username, password } = req.body;
+const SALT_ROUNDS = Number(process.env.SALT_ROUNDS || 10);
 
-  User.findByUsername(username, async (err, results) => {
-    if (err) return res.status(500).json({ error: "Lỗi server" });
-    if (results.length === 0)
-      return res.status(401).json({ error: "Tài khoản không tồn tại" });
+const isBcryptHash = (s) => typeof s === "string" && /^\$2[aby]\$\d{2}\$/.test(s);
+
+const queryAsync = (sql, params) =>
+  new Promise((resolve, reject) => {
+    db.query(sql, params, (err, results) => (err ? reject(err) : resolve(results)));
+  });
+
+router.post("/login", async (req, res) => {
+  try {
+    const username = String(req.body?.username || "").trim();
+    const password = String(req.body?.password || "");
+
+    if (!username || !password) {
+      return res.status(400).json({ message: "Thiếu username/password" });
+    }
+
+    const results = await queryAsync("SELECT * FROM users WHERE Username = ? LIMIT 1", [username]);
+    if (!results || results.length === 0) {
+      return res.status(401).json({ message: "Sai username hoặc mật khẩu" });
+    }
 
     const user = results[0];
+    const dbPass = user.Password;
 
-    // So sánh mật khẩu đã hash
-    const match = await bcrypt.compare(password, user.Password);
-    if (!match) return res.status(401).json({ error: "Sai mật khẩu" });
+    let ok = false;
 
-    // Tạo token
-    const token = jwt.sign(
-      {
-        id: user.MaNV,
-        username: user.Username,
-        vaiTro: user.VaiTro,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "8h" }
-    );
+    if (isBcryptHash(dbPass)) {
+      ok = await bcrypt.compare(password, dbPass);
+    } else {
+      // ✅ legacy/plaintext -> cho login nếu khớp, rồi tự hash lại
+      ok = password === String(dbPass || "");
+      if (ok) {
+        const newHash = await bcrypt.hash(password, SALT_ROUNDS);
+        await queryAsync("UPDATE users SET Password = ? WHERE MaNV = ?", [newHash, user.MaNV]);
+      }
+    }
+
+    if (!ok) return res.status(401).json({ message: "Sai mật khẩu" });
+
+    const payload = {
+      id: user.MaNV,
+      username: user.Username,
+      hoTen: user.HoTen,
+      vaiTro: user.VaiTro,
+    };
+
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "7d" });
 
     return res.json({
-      message: "Đăng nhập thành công",
       token,
-      user: {
-        id: user.MaNV,
-        username: user.Username,
-        hoTen: user.HoTen,
-        vaiTro: user.VaiTro,
-      },
+      user: payload,
     });
-  });
-});
-
-// Admin tạo user mới
-router.post("/create", async (req, res) => {
-  const { username, password, hoTen, vaiTro } = req.body;
-
-  const hashed = await bcrypt.hash(password, Number(process.env.SALT_ROUNDS));
-
-  User.create({ username, password: hashed, hoTen, vaiTro }, (err, result) => {
-    if (err) return res.status(500).json({ error: err });
-    res.json({ message: "Tạo user thành công" });
-  });
+  } catch (err) {
+    console.error("LOGIN_ERR:", err);
+    return res.status(500).json({ message: "Lỗi đăng nhập", error: err.message });
+  }
 });
 
 module.exports = router;

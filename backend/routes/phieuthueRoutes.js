@@ -1,11 +1,28 @@
 const express = require("express");
 const router = express.Router();
-const phieuThueController = require("../controllers/phieuthueController");
+const auth = require("../middleware/authMiddleware");
+const allow = require("../middleware/roleMiddleware");
+router.use(auth);
 
-// Tạo phiếu thuê phòng
-router.post("/", phieuThueController.createPhieuThue);
+// ✅ Khai báo biến là "controller"
+const controller = require("../controllers/phieuthueController");
 
-// (tuỳ chọn) lấy danh sách phiếu thuê
-router.get("/", phieuThueController.getAllPhieuThue);
+// Lấy danh sách
+router.get("/", allow("Admin", "Manage","User"), controller.getAllPhieuThue);
+
+// Tạo mới
+router.post("/", allow("Admin", "Manage","User"), controller.createPhieuThue);
+
+// Cập nhật (Sửa)
+router.put("/:soPhieu", allow("Admin", "Manage","User"), controller.updatePhieuThue);
+
+// Trả phòng
+router.put("/:soPhieu/checkout", allow("Admin", "Manage","User"), controller.checkOut);
+
+// Hủy phiếu
+router.put("/:soPhieu/huy", allow("Admin", "Manage","User"), controller.huyPhieu);
+
+// Xóa phiếu
+router.delete("/:id", allow("Admin", "Manage"), controller.deletePhieu);
 
 module.exports = router;
