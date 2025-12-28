@@ -535,6 +535,13 @@ const BookingManagement = () => {
                 const trangThai = b.TrangThaiLuuTru || "DANG_THUE";
                 const isDangThue = trangThai === "DANG_THUE";
 
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                const startDate = new Date(b.NgayBatDauThue);
+                startDate.setHours(0,0,0,0);
+
+                const isFuture = startDate > today;
+
                 return (
                   <tr
                     key={b.SoPhieu}
@@ -588,7 +595,7 @@ const BookingManagement = () => {
                           </button>
                         )}
 
-                        {isDangThue && (
+                        {isDangThue && !isFuture && (
                           <button
                             style={{
                               ...styles.actionBtn,

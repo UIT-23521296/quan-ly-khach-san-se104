@@ -21,6 +21,16 @@ const calculateBill = async (soPhieu) => {
     const [rows] = await db.promise().query(sqlBase, [soPhieu]);
     if (rows.length === 0) throw new Error("Phiếu thuê không tồn tại");
     const data = rows[0];
+    const ngayBatDau = new Date(data.NgayBatDauThue);
+    const homNay = new Date();
+    homNay.setHours(0, 0, 0, 0); // Reset giờ để so sánh ngày
+    ngayBatDau.setHours(0, 0, 0, 0);
+
+    if (homNay < ngayBatDau) {
+        return res.status(400).json({ 
+            message: `Phiếu này bắt đầu ngày ${data.NgayBatDauThue}. Chưa đến ngày nhận phòng nên không thể tính tiền!` 
+        });
+    }
 
     // 2. Đếm số khách thực tế
     const sqlKhach = `
@@ -34,7 +44,6 @@ const calculateBill = async (soPhieu) => {
     const soLuongKhach = dsKhach.length;
 
     // 3. Tính số ngày
-    const ngayBatDau = new Date(data.NgayBatDauThue);
     const ngayKetThuc = data.NgayDuKienTra ? new Date(data.NgayDuKienTra) : new Date(); 
     let soNgay = Math.ceil((Math.abs(ngayKetThuc - ngayBatDau)) / (1000 * 60 * 60 * 24));
     if (soNgay <= 0) soNgay = 1;

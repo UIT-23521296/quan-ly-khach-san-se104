@@ -1,5 +1,5 @@
 # ==================================================
-# Path: D:\Github\quan-ly-khach-san-se104
+# Path: E:\Dai Hoc\Nam 3\Nhap mon CNPM\quan-ly-khach-san-se104
 # Detected tech: docker, javascript, python, react, typescript
 # ==================================================
 
@@ -1187,12 +1187,23 @@ exports.updateThamSo = async (req, res) => {
 ### backend\controllers\userController.js
 ```js
 // backend/controllers/userController.js
-const bcrypt = require("bcryptjs"); // hoặc bcrypt đều được nếu bạn cài bcrypt
+const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 
-const ALLOWED_ROLES = ["Admin", "User"];
+const ALLOWED_ROLES = ["Admin", "Manage", "User"];
 
-// GET /api/users
+// helper: lấy user theo id (fallback nếu thiếu findByIdAsync)
+async function getUserByIdSafe(id) {
+  if (typeof User.findByIdAsync === "function") return await User.findByIdAsync(id);
+
+  // fallback: quét toàn bộ (ít user thì OK)
+  const all = await User.getAllAsync();
+  return all?.find((u) => String(u.id ?? u.MaNV) === String(id));
+}
+
+// ===================== ADMIN APIs =====================
+
+// GET /api/users  (Admin xem tất cả)
 exports.getAllUsers = async (req, res) => {
   try {
     const rows = await User.getAllAsync();
@@ -1202,7 +1213,7 @@ exports.getAllUsers = async (req, res) => {
   }
 };
 
-// POST /api/users
+// POST /api/users  (Admin tạo user/manage/admin)
 exports.createUser = async (req, res) => {
   try {
     const { username, password, hoTen, vaiTro } = req.body;
@@ -1211,7 +1222,7 @@ exports.createUser = async (req, res) => {
       return res.status(400).json({ message: "Thiếu dữ liệu tạo nhân viên" });
     }
     if (!ALLOWED_ROLES.includes(vaiTro)) {
-      return res.status(400).json({ message: "Vai trò không hợp lệ (Admin/User)" });
+      return res.status(400).json({ message: "Vai trò không hợp lệ (Admin/Manage/User)" });
     }
 
     const exists = await User.existsUsernameAsync(username);
@@ -1219,7 +1230,6 @@ exports.createUser = async (req, res) => {
 
     const hashed = await bcrypt.hash(password, Number(process.env.SALT_ROUNDS || 10));
 
-    // dùng callback create theo model của bạn
     User.create({ username, password: hashed, hoTen, vaiTro }, (err) => {
       if (err) return res.status(500).json({ message: "Lỗi tạo nhân viên", error: err.message || err });
       res.json({ message: "Tạo nhân viên thành công" });
@@ -1229,26 +1239,44 @@ exports.createUser = async (req, res) => {
   }
 };
 
-// PUT /api/users/:id
+// PUT /api/users/:id  (Admin sửa hoTen + vaiTro + (optional) password)
 exports.updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { hoTen, vaiTro } = req.body;
+    const { hoTen, vaiTro, password } = req.body;
 
     if (!hoTen || !vaiTro) {
       return res.status(400).json({ message: "Thiếu dữ liệu cập nhật (hoTen, vaiTro)" });
     }
     if (!ALLOWED_ROLES.includes(vaiTro)) {
-      return res.status(400).json({ message: "Vai trò không hợp lệ (Admin/User)" });
+      return res.status(400).json({ message: "Vai trò không hợp lệ (Admin/Manage/User)" });
     }
 
     // chặn tự hạ quyền bản thân
-    if (String(req.user?.id) === String(id) && req.user?.vaiTro === "Admin" && vaiTro === "User") {
+    if (String(req.user?.id) === String(id) && req.user?.vaiTro === "Admin" && vaiTro !== "Admin") {
       return res.status(400).json({ message: "Không được tự hạ quyền Admin của chính mình" });
     }
 
+    // 1) update info
     const result = await User.updateInfoAsync(id, { hoTen, vaiTro });
     if (!result?.affectedRows) return res.status(404).json({ message: "Nhân viên không tồn tại" });
+
+    // 2) update password (nếu có)
+    if (password && String(password).trim() !== "") {
+      const newPass = String(password);
+
+      if (newPass.length < 6) {
+        return res.status(400).json({ message: "Mật khẩu mới tối thiểu 6 ký tự" });
+      }
+
+      const hashed = await bcrypt.hash(newPass, Number(process.env.SALT_ROUNDS || 10));
+
+      // cần có hàm này trong model User
+      const passResult = await User.updatePasswordAsync(id, hashed);
+      if (!passResult?.affectedRows) {
+        return res.status(500).json({ message: "Cập nhật mật khẩu thất bại" });
+      }
+    }
 
     res.json({ message: "Cập nhật nhân viên thành công" });
   } catch (err) {
@@ -1256,19 +1284,19 @@ exports.updateUser = async (req, res) => {
   }
 };
 
-// DELETE /api/users/:id
+
+// DELETE /api/users/:id  (Admin xóa Manage/User, KHÔNG xóa Admin)
 exports.deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // chặn tự xóa bản thân
     if (String(req.user?.id) === String(id)) {
       return res.status(400).json({ message: "Không được tự xóa tài khoản đang đăng nhập" });
     }
 
-    // ✅ chặn xóa Admin (nếu bạn muốn)
-    const target = await User.findByIdAsync?.(id);
-    if (target && (target.VaiTro === "Admin" || target.vaiTro === "Admin")) {
+    const target = await getUserByIdSafe(id);
+    const targetRole = target?.VaiTro ?? target?.vaiTro;
+    if (targetRole === "Admin") {
       return res.status(400).json({ message: "Không được xóa tài khoản Admin" });
     }
 
@@ -1276,6 +1304,108 @@ exports.deleteUser = async (req, res) => {
     if (!result?.affectedRows) return res.status(404).json({ message: "Nhân viên không tồn tại" });
 
     res.json({ message: "Xóa nhân viên thành công" });
+  } catch (err) {
+    res.status(500).json({ message: "Lỗi xóa nhân viên", error: err.message });
+  }
+};
+
+// ===================== MANAGE APIs =====================
+
+// GET /api/users/managed  (Manage chỉ xem role=User)
+exports.getManagedUsers = async (req, res) => {
+  try {
+    const rows = await User.getAllAsync();
+    const onlyUsers = (rows || []).filter((u) => (u.VaiTro ?? u.vaiTro) === "User");
+    res.json(onlyUsers);
+  } catch (err) {
+    res.status(500).json({ message: "Lỗi lấy danh sách nhân viên", error: err.message });
+  }
+};
+
+// POST /api/users/managed  (Manage chỉ tạo role=User)
+exports.createManagedUser = async (req, res) => {
+  try {
+    const { username, password, hoTen } = req.body;
+
+    if (!username || !password || !hoTen) {
+      return res.status(400).json({ message: "Thiếu dữ liệu tạo nhân viên (username,password,hoTen)" });
+    }
+
+    const exists = await User.existsUsernameAsync(username);
+    if (exists) return res.status(409).json({ message: "Username đã tồn tại" });
+
+    const hashed = await bcrypt.hash(password, Number(process.env.SALT_ROUNDS || 10));
+
+    User.create({ username, password: hashed, hoTen, vaiTro: "User" }, (err) => {
+      if (err) return res.status(500).json({ message: "Lỗi tạo nhân viên", error: err.message || err });
+      res.json({ message: "Tạo nhân viên (User) thành công" });
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Lỗi tạo nhân viên", error: err.message });
+  }
+};
+
+// PUT /api/users/managed/:id  (Manage chỉ sửa hoTen của User, không đổi role)
+// PUT /api/users/managed/:id  (Manage chỉ sửa hoTen + (optional) password của User)
+exports.updateManagedUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { hoTen, password } = req.body;
+
+    if (!hoTen) return res.status(400).json({ message: "Thiếu dữ liệu cập nhật (hoTen)" });
+
+    const target = await getUserByIdSafe(id);
+    if (!target) return res.status(404).json({ message: "Nhân viên không tồn tại" });
+
+    const targetRole = target?.VaiTro ?? target?.vaiTro;
+    if (targetRole !== "User") {
+      return res.status(403).json({ message: "Manage chỉ được sửa tài khoản có role User" });
+    }
+
+    const result = await User.updateInfoAsync(id, { hoTen, vaiTro: "User" });
+    if (!result?.affectedRows) return res.status(404).json({ message: "Nhân viên không tồn tại" });
+
+    if (password && String(password).trim() !== "") {
+      const newPass = String(password);
+      if (newPass.length < 6) {
+        return res.status(400).json({ message: "Mật khẩu mới tối thiểu 6 ký tự" });
+      }
+
+      const hashed = await bcrypt.hash(newPass, Number(process.env.SALT_ROUNDS || 10));
+      const passResult = await User.updatePasswordAsync(id, hashed);
+      if (!passResult?.affectedRows) {
+        return res.status(500).json({ message: "Cập nhật mật khẩu thất bại" });
+      }
+    }
+
+    res.json({ message: "Cập nhật nhân viên (User) thành công" });
+  } catch (err) {
+    res.status(500).json({ message: "Lỗi cập nhật nhân viên", error: err.message });
+  }
+};
+
+
+// DELETE /api/users/managed/:id  (Manage chỉ xóa User)
+exports.deleteManagedUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (String(req.user?.id) === String(id)) {
+      return res.status(400).json({ message: "Không được tự xóa tài khoản đang đăng nhập" });
+    }
+
+    const target = await getUserByIdSafe(id);
+    if (!target) return res.status(404).json({ message: "Nhân viên không tồn tại" });
+
+    const targetRole = target?.VaiTro ?? target?.vaiTro;
+    if (targetRole !== "User") {
+      return res.status(403).json({ message: "Manage chỉ được xóa tài khoản có role User" });
+    }
+
+    const result = await User.deleteByIdAsync(id);
+    if (!result?.affectedRows) return res.status(404).json({ message: "Nhân viên không tồn tại" });
+
+    res.json({ message: "Xóa nhân viên (User) thành công" });
   } catch (err) {
     res.status(500).json({ message: "Lỗi xóa nhân viên", error: err.message });
   }
@@ -1733,12 +1863,13 @@ module.exports = router;
 
 ### backend\routes\baocaoRoutes.js
 ```js
+//backend/routes/baocaoRoutes.js
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/baocaoController");
 const auth = require("../middleware/authMiddleware");
 const allow = require("../middleware/roleMiddleware");
-router.use(auth, allow("Admin"));
+router.use(auth, allow("Admin", "Manage"));
 
 // API: Lấy dữ liệu Live để preview
 router.get("/doanhthu", controller.getDoanhThuThang); 
@@ -1787,7 +1918,7 @@ const controller = require("../controllers/dashboardController");
 const auth = require("../middleware/authMiddleware");
 const allow = require("../middleware/roleMiddleware");
 
-router.get("/stats", auth, allow("Admin","User"), controller.getDashboardStats);
+router.get("/stats", auth, allow("Admin", "Manage", "User"), controller.getDashboardStats);
 
 module.exports = router;
 ```
@@ -1804,19 +1935,19 @@ router.use(auth);
 // Các route cho HÓA ĐƠN
 
 // Lấy tất cả hóa đơn
-router.get("/", allow("Admin","User"), controller.getAllHoaDon);
+router.get("/", allow("Admin", "Manage","User"), controller.getAllHoaDon);
 
 // Xem trước hóa đơn theo số phiếu thuê
-router.get("/preview/:soPhieu", allow("Admin","User"), controller.previewHoaDon);
+router.get("/preview/:soPhieu", allow("Admin", "Manage","User"), controller.previewHoaDon);
 
 // Lấy chi tiết hóa đơn theo số hóa đơn
-router.get("/:soHoaDon", allow("Admin","User"), controller.getHoaDonDetail);
+router.get("/:soHoaDon", allow("Admin", "Manage","User"), controller.getHoaDonDetail);
 
 // Tạo và thanh toán hóa đơn
-router.post("/pay", allow("Admin","User"), controller.createAndPay);
+router.post("/pay", allow("Admin", "Manage","User"), controller.createAndPay);
 
 // Xóa hóa đơn
-router.delete("/:soHoaDon", allow("Admin"), controller.deleteHoaDon);
+router.delete("/:soHoaDon", allow("Admin", "Manage"), controller.deleteHoaDon);
 
 module.exports = router;
 ```
@@ -1830,9 +1961,9 @@ const auth = require("../middleware/authMiddleware");
 const allow = require("../middleware/roleMiddleware");
 router.use(auth);
 
-router.get("/", allow("Admin","User"), controller.getAllCustomers);
-router.put("/:id", allow("Admin","User"), controller.updateCustomer);
-router.delete("/:id", allow("Admin"), controller.deleteCustomer);
+router.get("/", allow("Admin", "Manage", "User"), controller.getAllCustomers);
+router.put("/:id", allow("Admin", "Manage", "User"), controller.updateCustomer);
+router.delete("/:id", allow("Admin", "Manage"), controller.deleteCustomer);
 
 module.exports = router;
 ```
@@ -1885,22 +2016,22 @@ router.use(auth);
 const controller = require("../controllers/phieuthueController");
 
 // Lấy danh sách
-router.get("/", allow("Admin","User"), controller.getAllPhieuThue);
+router.get("/", allow("Admin", "Manage","User"), controller.getAllPhieuThue);
 
 // Tạo mới
-router.post("/", allow("Admin","User"), controller.createPhieuThue);
+router.post("/", allow("Admin", "Manage","User"), controller.createPhieuThue);
 
 // Cập nhật (Sửa)
-router.put("/:soPhieu", allow("Admin","User"), controller.updatePhieuThue);
+router.put("/:soPhieu", allow("Admin", "Manage","User"), controller.updatePhieuThue);
 
 // Trả phòng
-router.put("/:soPhieu/checkout", allow("Admin","User"), controller.checkOut);
+router.put("/:soPhieu/checkout", allow("Admin", "Manage","User"), controller.checkOut);
 
 // Hủy phiếu
-router.put("/:soPhieu/huy", allow("Admin","User"), controller.huyPhieu);
+router.put("/:soPhieu/huy", allow("Admin", "Manage","User"), controller.huyPhieu);
 
 // Xóa phiếu
-router.delete("/:id", allow("Admin"), controller.deletePhieu);
+router.delete("/:id", allow("Admin", "Manage"), controller.deletePhieu);
 
 module.exports = router;
 ```
@@ -1925,15 +2056,15 @@ const {
 
 router.use(auth);
 
-router.get("/", allow("Admin", "User"), getAllRooms);
-router.get("/:id", allow("Admin", "User"), getRoomById);
+router.get("/", allow("Admin", "Manage", "User"), getAllRooms);
+router.get("/:id", allow("Admin", "Manage", "User"), getRoomById);
 
-router.post("/", allow("Admin"), createRoom);
-router.put("/:id", allow("Admin"), updateRoom);
-router.delete("/:id", allow("Admin"), deleteRoom);
+router.post("/", allow("Admin", "Manage"), createRoom);
+router.put("/:id", allow("Admin", "Manage"), updateRoom);
+router.delete("/:id", allow("Admin", "Manage"), deleteRoom);
 
-router.put("/:id/maintenance", allow("Admin"), toggleMaintenance);
-router.put("/:id/business", allow("Admin"), toggleBusinessStatus);
+router.put("/:id/maintenance", allow("Admin", "Manage"), toggleMaintenance);
+router.put("/:id/business", allow("Admin", "Manage"), toggleBusinessStatus);
 
 module.exports = router;
 
@@ -1943,33 +2074,43 @@ module.exports = router;
 ```js
 const express = require("express");
 const router = express.Router();
-const controller = require("../controllers/quidinhController");
+
+// ✅ FIX đường dẫn middleware
 const auth = require("../middleware/authMiddleware");
 const allow = require("../middleware/roleMiddleware");
-router.use(auth, allow("Admin"));
 
-// Loại phòng
-router.get("/loaiphong", controller.getLoaiPhong);
-router.post("/loaiphong", controller.createLoaiPhong);
-router.put("/loaiphong/:id", controller.updateLoaiPhong);
-router.delete("/loaiphong/:id", controller.deleteLoaiPhong);
+// ✅ FIX đường dẫn controller
+const controller = require("../controllers/quidinhController");
 
-// Loại khách
-router.get("/loaikhach", controller.getLoaiKhach);
-router.post("/loaikhach", controller.createLoaiKhach);
-router.put("/loaikhach/:id", controller.updateLoaiKhach);
-router.delete("/loaikhach/:id", controller.deleteLoaiKhach);
+router.use(auth);
 
-// Phụ thu
-router.get("/phuthu", controller.getPhuThu);
-router.post("/phuthu", controller.updatePhuThu);
-router.delete("/phuthu/:id", controller.deletePhuThu);
+// quyền
+const CAN_VIEW = allow("Admin", "Manage", "User");
+const ADMIN_ONLY = allow("Admin");
 
-// Tham số
-router.get("/thamso", controller.getThamSo);
-router.put("/thamso", controller.updateThamSo);
+// ===== LOẠI PHÒNG =====
+router.get("/loaiphong", CAN_VIEW, controller.getLoaiPhong);
+router.post("/loaiphong", ADMIN_ONLY, controller.createLoaiPhong);
+router.put("/loaiphong/:id", ADMIN_ONLY, controller.updateLoaiPhong);
+router.delete("/loaiphong/:id", ADMIN_ONLY, controller.deleteLoaiPhong);
+
+// ===== LOẠI KHÁCH =====
+router.get("/loaikhach", CAN_VIEW, controller.getLoaiKhach);
+router.post("/loaikhach", ADMIN_ONLY, controller.createLoaiKhach);
+router.put("/loaikhach/:id", ADMIN_ONLY, controller.updateLoaiKhach);
+router.delete("/loaikhach/:id", ADMIN_ONLY, controller.deleteLoaiKhach);
+
+// ===== PHỤ THU =====
+router.get("/phuthu", CAN_VIEW, controller.getPhuThu);
+router.post("/phuthu", ADMIN_ONLY, controller.updatePhuThu);
+router.delete("/phuthu/:id", ADMIN_ONLY, controller.deletePhuThu);
+
+// ===== THAM SỐ =====
+router.get("/thamso", CAN_VIEW, controller.getThamSo);
+router.put("/thamso", ADMIN_ONLY, controller.updateThamSo);
 
 module.exports = router;
+
 ```
 
 ### backend\routes\thamSoRoutes.js
@@ -1997,18 +2138,30 @@ module.exports = router;
 // backend/routes/userRoutes.js
 const express = require("express");
 const router = express.Router();
+
 const auth = require("../middleware/authMiddleware");
 const allow = require("../middleware/roleMiddleware");
 const controller = require("../controllers/userController");
 
-router.use(auth, allow("Admin"));
+// ✅ chỉ xác thực chung, không chặn role ở mức router nữa
+router.use(auth);
 
-router.get("/", controller.getAllUsers);
-router.post("/", controller.createUser);
-router.put("/:id", controller.updateUser);
-router.delete("/:id", controller.deleteUser);
+/* ===================== MANAGE ZONE ===================== */
+
+router.get("/managed", allow("Admin", "Manage"), controller.getManagedUsers);
+router.post("/managed", allow("Admin", "Manage"), controller.createManagedUser);
+router.put("/managed/:id", allow("Admin", "Manage"), controller.updateManagedUser);
+router.delete("/managed/:id", allow("Admin", "Manage"), controller.deleteManagedUser);
+
+/* ===================== ADMIN ZONE ===================== */
+
+router.get("/", allow("Admin"), controller.getAllUsers);
+router.post("/", allow("Admin"), controller.createUser);
+router.put("/:id", allow("Admin"), controller.updateUser);
+router.delete("/:id", allow("Admin"), controller.deleteUser);
 
 module.exports = router;
+
 ```
 
 ### backend\services\api.js
@@ -2357,18 +2510,12 @@ export default defineConfig({
 ### frontend\src\App.jsx
 ```jsx
 // src/App.jsx
-import {
-  BrowserRouter as Router,
-  Routes,
-  Route,
-  Navigate,
-} from "react-router-dom";
+import React from "react";
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
+
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import RoomManagement from "./pages/RoomManagement";
-import Navbar from "./components/Navbar";
-import Sidebar from "./components/Sidebar";
-import { useState } from "react";
 import BookingManagement from "./pages/BookingManagement";
 import InvoiceManagement from "./pages/InvoiceManagement";
 import RoomSearch from "./pages/RoomSearch";
@@ -2376,11 +2523,13 @@ import ReportManagement from "./pages/ReportManagement";
 import Settings from "./pages/Settings";
 import CustomerManagement from "./pages/CustomerManagement";
 import StaffManagement from "./pages/StaffManagement";
+
+import Navbar from "./components/Navbar";
+import Sidebar from "./components/Sidebar";
 import ChatBot from "./components/ChatBot";
 
 function PrivateLayout({ children }) {
   const token = localStorage.getItem("token");
-
   if (!token) return <Navigate to="/login" replace />;
 
   return (
@@ -2391,7 +2540,6 @@ function PrivateLayout({ children }) {
         <div style={styles.content}>{children}</div>
       </div>
 
-      {/* ✅ CHATBOT GẮN Ở ĐÂY */}
       <ChatBot />
     </div>
   );
@@ -2399,18 +2547,28 @@ function PrivateLayout({ children }) {
 
 function RequireRole({ allow, children }) {
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const role = user?.vaiTro; // 'Admin' | 'User'
+  const role = user?.vaiTro; // Admin | Manage | User
 
   if (!role) return <Navigate to="/login" replace />;
-
   if (!allow.includes(role)) return <Navigate to="/" replace />;
 
   return children;
 }
 
 function SidebarWrapper() {
-  const [activeMenu, setActiveMenu] = useState("dashboard");
-  return <Sidebar activeMenu={activeMenu} setActiveMenu={setActiveMenu} />;
+  const { pathname } = useLocation();
+
+  let activeMenu = "dashboard";
+  if (pathname.startsWith("/rooms")) activeMenu = "rooms";
+  else if (pathname.startsWith("/phieuthue")) activeMenu = "booking";
+  else if (pathname.startsWith("/invoice")) activeMenu = "invoice";
+  else if (pathname.startsWith("/room-search")) activeMenu = "room-search"; // ✅ FIX
+  else if (pathname.startsWith("/customers")) activeMenu = "customers";
+  else if (pathname.startsWith("/staff")) activeMenu = "staff";
+  else if (pathname.startsWith("/settings")) activeMenu = "settings";
+  else if (pathname.startsWith("/report")) activeMenu = "report";
+
+  return <Sidebar activeMenu={activeMenu} />;
 }
 
 function App() {
@@ -2420,7 +2578,7 @@ function App() {
         {/* PUBLIC */}
         <Route path="/login" element={<Login />} />
 
-        {/* PRIVATE ROUTES */}
+        {/* PRIVATE */}
         <Route
           path="/"
           element={
@@ -2466,22 +2624,24 @@ function App() {
           }
         />
 
+        {/* Report: Admin + Manage */}
         <Route
           path="/report"
           element={
             <PrivateLayout>
-              <RequireRole allow={["Admin"]}>
+              <RequireRole allow={["Admin", "Manage"]}>
                 <ReportManagement />
               </RequireRole>
             </PrivateLayout>
           }
         />
 
+        {/* Settings: ai cũng xem; quyền sửa chặn trong Settings.jsx */}
         <Route
           path="/settings"
           element={
             <PrivateLayout>
-              <RequireRole allow={["Admin"]}>
+              <RequireRole allow={["Admin", "Manage", "User"]}>
                 <Settings />
               </RequireRole>
             </PrivateLayout>
@@ -2501,34 +2661,24 @@ function App() {
           path="/staff"
           element={
             <PrivateLayout>
-              <RequireRole allow={["Admin"]}>
+              <RequireRole allow={["Admin", "Manage"]}>
                 <StaffManagement />
               </RequireRole>
             </PrivateLayout>
           }
         />
+
+        {/* Not found */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>
   );
 }
 
 const styles = {
-  app: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100vh",
-  },
-  main: {
-    display: "flex",
-    flex: 1,
-    overflow: "hidden",
-  },
-  content: {
-    flex: 1,
-    padding: "1rem",
-    backgroundColor: "#F5F8FF",
-    overflow: "auto",
-  },
+  app: { display: "flex", flexDirection: "column", height: "100vh" },
+  main: { display: "flex", flex: 1, overflow: "hidden" },
+  content: { flex: 1, padding: "1rem", backgroundColor: "#F5F8FF", overflow: "auto" },
 };
 
 export default App;
@@ -2732,9 +2882,9 @@ const Navbar = () => {
   // Map vai trò sang tiếng Việt
   const roleDisplay = {
     Admin: "Quản trị viên",
-    QuanLy: "Quản lý",
-    LeTan: "Lễ tân",
-    BanGiamDoc: "Ban giám đốc",
+    Manage: "Quản lý",
+    User: "Lễ tân",
+  
   };
 
   return (
@@ -2809,14 +2959,13 @@ export default Navbar;
 ```jsx
 // src/components/Sidebar.jsx
 import React from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
-const Sidebar = ({ activeMenu, setActiveMenu }) => {
-  const navigate = useNavigate();
-
+const Sidebar = ({ activeMenu }) => {
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const role = user?.vaiTro; // 'Admin' | 'User'
+  const role = user?.vaiTro; // Admin | Manage | User
   const isAdmin = role === "Admin";
+  const isManage = role === "Manage";
 
   const menuItems = [
     { id: "dashboard", icon: "📊", label: "Tổng quan", path: "/" },
@@ -2825,34 +2974,41 @@ const Sidebar = ({ activeMenu, setActiveMenu }) => {
     { id: "booking", icon: "📝", label: "Thuê phòng", path: "/phieuthue" },
     { id: "customers", icon: "👥", label: "Khách hàng", path: "/customers" },
     { id: "invoice", icon: "💵", label: "Hóa đơn", path: "/invoice" },
+    { id: "settings", icon: "⚙️", label: "Qui định", path: "/settings" },
 
-    ...(isAdmin
+    ...(isAdmin || isManage
       ? [
-          { id: "staff", icon: "🧑‍💼", label: "Quản lý nhân viên", path: "/staff" },
+          {
+            id: "staff",
+            icon: "🧑‍💼",
+            label: isAdmin ? "Phân quyền" : "Quản lý nhân viên",
+            path: "/staff",
+          },
           { id: "report", icon: "📈", label: "Báo cáo doanh thu", path: "/report" },
-          { id: "settings", icon: "⚙️", label: "Qui định", path: "/settings" },
         ]
       : []),
   ];
 
   return (
     <div style={styles.sidebar}>
-      {menuItems.map((item) => (
-        <div
-          key={item.id}
-          style={{
-            ...styles.menuItem,
-            backgroundColor: activeMenu === item.id ? "#3A7DFF" : "transparent",
-          }}
-          onClick={() => {
-            setActiveMenu(item.id);
-            navigate(item.path); // 👉 điều hướng route
-          }}
-        >
-          <span style={styles.icon}>{item.icon}</span>
-          <span>{item.label}</span>
-        </div>
-      ))}
+      {menuItems.map((item) => {
+        const isActive = activeMenu === item.id;
+
+        return (
+          <Link
+            key={item.id}
+            to={item.path}
+            style={{
+              ...styles.menuItem,
+              backgroundColor: isActive ? "#3A7DFF" : "transparent",
+              color: isActive ? "white" : "#e5e7eb",
+            }}
+          >
+            <span style={styles.icon}>{item.icon}</span>
+            <span>{item.label}</span>
+          </Link>
+        );
+      })}
     </div>
   );
 };
@@ -2872,7 +3028,9 @@ const styles = {
     cursor: "pointer",
     borderRadius: "8px",
     margin: "0.3rem 0.5rem",
-    transition: "0.3s",
+    transition: "0.25s",
+    textDecoration: "none",
+    fontWeight: 600,
   },
   icon: {
     marginRight: "1rem",
@@ -5681,7 +5839,10 @@ import { Navigate } from "react-router-dom";
 const ReportManagement = () => {
   // ✅ CHẶN USER NGAY TRÊN ĐẦU (trước mọi hook)
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  if (user?.vaiTro !== "Admin") return <Navigate to="/" replace />;
+  const role = user?.vaiTro; // Admin | Manage | User
+  const canViewReport = ["Admin", "Manage"].includes(role);
+
+  if (!canViewReport) return <Navigate to="/" replace />;
 
   const [activeTab, setActiveTab] = useState("create"); // 'create' | 'saved'
 
@@ -5770,10 +5931,10 @@ const ReportManagement = () => {
             </thead>
             <tbody>
               ${safeData
-                .map((item, index) => {
-                  const doanhThu = Number(item?.DoanhThu || 0);
-                  const percent = total > 0 ? ((doanhThu / total) * 100).toFixed(2) : 0;
-                  return `
+        .map((item, index) => {
+          const doanhThu = Number(item?.DoanhThu || 0);
+          const percent = total > 0 ? ((doanhThu / total) * 100).toFixed(2) : 0;
+          return `
                     <tr>
                       <td>${index + 1}</td>
                       <td class="text-left">${item?.TenLoaiPhong || item?.MaLoaiPhong || ""}</td>
@@ -5781,8 +5942,8 @@ const ReportManagement = () => {
                       <td>${percent}%</td>
                     </tr>
                   `;
-                })
-                .join("")}
+        })
+        .join("")}
               <tr class="total-row">
                 <td colspan="2">TỔNG CỘNG</td>
                 <td class="text-right">${Number(total || 0).toLocaleString("vi-VN")} đ</td>
@@ -7394,14 +7555,17 @@ export default RoomSearch;
 
 ### frontend\src\pages\Settings.jsx
 ```jsx
-import React, { useState, useEffect, useCallback } from "react";
+// frontend/src/pages/Settings.jsx
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import api from "../services/api";
 import { Navigate } from "react-router-dom";
 
 const Settings = () => {
   // ✅ Role check (KHÔNG return trước hook)
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const isAdmin = user?.vaiTro === "Admin";
+  const role = user?.vaiTro; // Admin | Manage | User
+  const isAdmin = role === "Admin";
+  const canView = isAdmin || role === "Manage" || role === "User"; // ai cũng xem Quy định
 
   const [activeTab, setActiveTab] = useState("loaiphong");
 
@@ -7462,10 +7626,21 @@ const Settings = () => {
   }, [activeTab]);
 
   useEffect(() => {
-    if (isAdmin) fetchData();
-  }, [fetchData, isAdmin]);
+    if (canView) fetchData();
+  }, [fetchData, canView]);
+
+  // ===== Quyền sửa =====
+  const canEdit = isAdmin; // ✅ Manage/User chỉ xem
+
+  // (Optional) chặn gọi nhầm CRUD nếu không phải admin
+  const forbidIfNoEdit = () => {
+    if (canEdit) return false;
+    alert("⚠️ Bạn chỉ có quyền XEM Quy định, không được thay đổi.");
+    return true;
+  };
 
   const handleDelete = async (id, type) => {
+    if (forbidIfNoEdit()) return;
     if (!window.confirm("⚠️ Bạn có chắc chắn muốn XÓA VĨNH VIỄN mục này?")) return;
     try {
       await api.delete(`/quidinh/${type}/${id}`);
@@ -7478,6 +7653,8 @@ const Settings = () => {
   };
 
   const handleSave = async () => {
+    if (forbidIfNoEdit()) return;
+
     try {
       if (activeTab === "loaiphong") {
         const rawPrice = form.DonGia ? String(form.DonGia).replace(/,/g, "") : "0";
@@ -7533,7 +7710,6 @@ const Settings = () => {
           return;
         }
 
-        // ✅ Nếu backend bạn có PUT thì dùng; nếu chưa có thì bạn có thể đổi lại chỉ POST
         if (editingItem) {
           await api.put(`/quidinh/phuthu/${editingItem.KhachThu}`, payload);
         } else {
@@ -7552,6 +7728,8 @@ const Settings = () => {
   };
 
   const handleSaveThamSo = async () => {
+    if (forbidIfNoEdit()) return;
+
     try {
       const payload = {
         SoKhachToiDa: Number(thamSo.SoKhachToiDa),
@@ -7562,10 +7740,7 @@ const Settings = () => {
         alert("❌ Số khách tối đa phải là số > 0.");
         return;
       }
-      if (
-        Number.isNaN(payload.SoKhachKhongTinhPhuThu) ||
-        payload.SoKhachKhongTinhPhuThu < 0
-      ) {
+      if (Number.isNaN(payload.SoKhachKhongTinhPhuThu) || payload.SoKhachKhongTinhPhuThu < 0) {
         alert("❌ Số khách tiêu chuẩn không hợp lệ.");
         return;
       }
@@ -7583,6 +7758,11 @@ const Settings = () => {
   };
 
   const openModal = (item) => {
+    if (!canEdit) {
+      alert("⚠️ Bạn chỉ có quyền XEM Quy định, không được thay đổi.");
+      return;
+    }
+
     setEditingItem(item);
 
     if (item) {
@@ -7597,6 +7777,8 @@ const Settings = () => {
   };
 
   const renderActions = (item, id, type) => {
+    if (!canEdit) return <span style={{ color: "#94a3b8" }}>Chỉ xem</span>;
+
     return (
       <div style={{ display: "flex", gap: "8px", justifyContent: "center" }}>
         <button style={styles.btnEdit} onClick={() => openModal(item)} title="Sửa thông tin">
@@ -7609,8 +7791,17 @@ const Settings = () => {
     );
   };
 
-  // ✅ Redirect staff/user
-  if (!isAdmin) return <Navigate to="/" replace />;
+  const readOnlyBanner = useMemo(() => {
+    if (canEdit) return null;
+    return (
+      <div style={styles.readOnlyBanner}>
+        👀 Bạn đang ở chế độ <b>Chỉ xem</b>. Chỉ <b>Admin</b> mới được thay đổi các quy định.
+      </div>
+    );
+  }, [canEdit]);
+
+  // ✅ Redirect nếu chưa đăng nhập/không có role hợp lệ
+  if (!canView) return <Navigate to="/" replace />;
 
   return (
     <div style={styles.wrapper}>
@@ -7620,6 +7811,8 @@ const Settings = () => {
           <p style={styles.subtitle}>Quản lý danh mục phòng, khách và tham số hệ thống.</p>
         </div>
       </div>
+
+      {readOnlyBanner}
 
       <div style={styles.tabContainer}>
         {["loaiphong", "loaikhach", "phuthu", "thamso"].map((tab) => (
@@ -7642,11 +7835,13 @@ const Settings = () => {
         {/* --- LOẠI PHÒNG --- */}
         {activeTab === "loaiphong" && (
           <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
-              <button style={styles.btnAdd} onClick={() => openModal(null)}>
-                + Thêm Loại Phòng
-              </button>
-            </div>
+            {canEdit && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
+                <button style={styles.btnAdd} onClick={() => openModal(null)}>
+                  + Thêm Loại Phòng
+                </button>
+              </div>
+            )}
 
             <div style={styles.card}>
               <table style={styles.table}>
@@ -7696,11 +7891,13 @@ const Settings = () => {
         {/* --- LOẠI KHÁCH --- */}
         {activeTab === "loaikhach" && (
           <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
-              <button style={styles.btnAdd} onClick={() => openModal(null)}>
-                + Thêm Loại Khách
-              </button>
-            </div>
+            {canEdit && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
+                <button style={styles.btnAdd} onClick={() => openModal(null)}>
+                  + Thêm Loại Khách
+                </button>
+              </div>
+            )}
 
             <div style={styles.card}>
               <table style={styles.table}>
@@ -7747,11 +7944,13 @@ const Settings = () => {
         {/* --- PHỤ THU --- */}
         {activeTab === "phuthu" && (
           <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
-              <button style={styles.btnAdd} onClick={() => openModal(null)}>
-                + Thêm Mốc Phụ Thu
-              </button>
-            </div>
+            {canEdit && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
+                <button style={styles.btnAdd} onClick={() => openModal(null)}>
+                  + Thêm Mốc Phụ Thu
+                </button>
+              </div>
+            )}
 
             <div style={styles.card}>
               <table style={styles.table}>
@@ -7814,6 +8013,7 @@ const Settings = () => {
                   style={styles.inputLarge}
                   value={thamSo.SoKhachToiDa}
                   onChange={(e) => setThamSo({ ...thamSo, SoKhachToiDa: Number(e.target.value) })}
+                  disabled={!canEdit}
                 />
               </div>
 
@@ -7826,22 +8026,34 @@ const Settings = () => {
                   type="number"
                   style={styles.inputLarge}
                   value={thamSo.SoKhachKhongTinhPhuThu}
-                  onChange={(e) => setThamSo({ ...thamSo, SoKhachKhongTinhPhuThu: Number(e.target.value) })}
+                  onChange={(e) =>
+                    setThamSo({ ...thamSo, SoKhachKhongTinhPhuThu: Number(e.target.value) })
+                  }
+                  disabled={!canEdit}
                 />
               </div>
 
-              <div style={{ textAlign: "right", marginTop: "40px", paddingTop: "20px", borderTop: "1px solid #e2e8f0" }}>
-                <button style={styles.btnSave} onClick={handleSaveThamSo}>
-                  💾 Lưu Thay Đổi
-                </button>
-              </div>
+              {canEdit && (
+                <div
+                  style={{
+                    textAlign: "right",
+                    marginTop: "40px",
+                    paddingTop: "20px",
+                    borderTop: "1px solid #e2e8f0",
+                  }}
+                >
+                  <button style={styles.btnSave} onClick={handleSaveThamSo}>
+                    💾 Lưu Thay Đổi
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
 
-      {/* MODAL */}
-      {isModalOpen && (
+      {/* MODAL (Admin-only) */}
+      {canEdit && isModalOpen && (
         <div style={styles.overlay} onClick={() => setIsModalOpen(false)}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
             <div style={styles.modalHeader}>
@@ -7931,7 +8143,7 @@ const Settings = () => {
                     <input
                       type="number"
                       style={styles.inputModal}
-                      disabled={!!editingItem} // ✅ tránh đổi khóa chính khi sửa
+                      disabled={!!editingItem}
                       value={form.KhachThu ?? ""}
                       onChange={(e) => setForm({ ...form, KhachThu: Number(e.target.value) })}
                     />
@@ -7950,7 +8162,15 @@ const Settings = () => {
                 </>
               )}
 
-              <div style={{ textAlign: "right", marginTop: 30, display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+              <div
+                style={{
+                  textAlign: "right",
+                  marginTop: 30,
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: "12px",
+                }}
+              >
                 <button style={styles.btnCancel} onClick={() => setIsModalOpen(false)}>
                   Hủy bỏ
                 </button>
@@ -7972,6 +8192,16 @@ const styles = {
   headerRow: { marginBottom: "2rem" },
   title: { fontSize: "2rem", fontWeight: 800, color: "#1e293b", marginBottom: "0.5rem" },
   subtitle: { color: "#64748b", fontSize: "1rem" },
+
+  readOnlyBanner: {
+    marginBottom: 14,
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #e2e8f0",
+    background: "#f8fafc",
+    color: "#475569",
+    fontWeight: 600,
+  },
 
   content: { marginTop: "10px" },
 
@@ -8115,10 +8345,12 @@ const styles = {
 };
 
 export default Settings;
+
 ```
 
 ### frontend\src\pages\StaffManagement.jsx
 ```jsx
+// frontend/src/pages/StaffManagement.jsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import api from "../services/api";
@@ -8135,7 +8367,7 @@ const normalizeUser = (u) => {
   const id = pick(u, ["MaNV", "id", "ID", "userId"]);
   const username = pick(u, ["Username", "username", "TenDangNhap"]);
   const hoTen = pick(u, ["HoTen", "hoTen", "fullName", "TenNV"]);
-  const vaiTro = pick(u, ["VaiTro", "vaiTro", "role"], "User");
+  const vaiTro = pick(u, ["VaiTro", "vaiTro", "role"], "User"); // Admin | Manage | User
   const ngayTao = pick(u, ["NgayTao", "createdAt", "ngayTao"]);
   return { raw: u, id, username, hoTen, vaiTro, ngayTao };
 };
@@ -8161,14 +8393,17 @@ const emptyForm = {
 const StaffManagement = () => {
   // ✅ Role check (KHÔNG return trước hook)
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const isAdmin = user?.vaiTro === "Admin";
+  const role = user?.vaiTro; // Admin | Manage | User
+  const isAdmin = role === "Admin";
+  const isManage = role === "Manage";
+  const canAccess = isAdmin || isManage;
 
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(false);
 
   // Search + Filter
   const [searchTerm, setSearchTerm] = useState("");
-  const [roleFilter, setRoleFilter] = useState("ALL"); // ALL | Admin | User
+  const [roleFilter, setRoleFilter] = useState("ALL"); // Admin dùng: ALL | Admin | Manage | User
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -8178,53 +8413,11 @@ const StaffManagement = () => {
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState({});
 
-  // ========= API call with fallback =========
-  const apiGetWithFallback = useCallback(async (primary, fallback) => {
-    try {
-      return await api.get(primary);
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 404 && fallback) return await api.get(fallback);
-      throw err;
-    }
-  }, []);
-
-  const apiPutWithFallback = useCallback(async (primary, fallback, payload) => {
-    try {
-      return await api.put(primary, payload);
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 404 && fallback) return await api.put(fallback, payload);
-      throw err;
-    }
-  }, []);
-
-  const apiDeleteWithFallback = useCallback(async (primary, fallback) => {
-    try {
-      return await api.delete(primary);
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 404 && fallback) return await api.delete(fallback);
-      throw err;
-    }
-  }, []);
-
-  const apiPostWithFallback = useCallback(async (primary, fallback, payload) => {
-    try {
-      return await api.post(primary, payload);
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 404 && fallback) return await api.post(fallback, payload);
-      throw err;
-    }
-  }, []);
-
   // ========= Fetch list =========
   const fetchStaff = useCallback(async () => {
     setLoading(true);
     try {
-      // ưu tiên /users, fallback /staff
-      const res = await apiGetWithFallback("/users", "/staff");
+      const res = isAdmin ? await api.get("/users") : await api.get("/users/managed");
       const list = Array.isArray(res.data) ? res.data : [];
       setStaff(list.map(normalizeUser));
     } catch (e) {
@@ -8233,17 +8426,20 @@ const StaffManagement = () => {
     } finally {
       setLoading(false);
     }
-  }, [apiGetWithFallback]);
+  }, [isAdmin]);
 
   useEffect(() => {
-    if (isAdmin) fetchStaff();
-  }, [fetchStaff, isAdmin]);
+    if (canAccess) fetchStaff();
+  }, [fetchStaff, canAccess]);
 
   // ========= Modal handlers =========
   const openAddModal = () => {
     setMode("add");
     setEditing(null);
-    setForm(emptyForm);
+    setForm({
+      ...emptyForm,
+      vaiTro: "User", // Manage luôn User; Admin mặc định User
+    });
     setErrors({});
     setIsModalOpen(true);
   };
@@ -8255,7 +8451,7 @@ const StaffManagement = () => {
       username: row.username || "",
       password: "", // edit: password optional
       hoTen: row.hoTen || "",
-      vaiTro: row.vaiTro || "User",
+      vaiTro: isAdmin ? row.vaiTro || "User" : "User",
     });
     setErrors({});
     setIsModalOpen(true);
@@ -8276,12 +8472,11 @@ const StaffManagement = () => {
     const errs = {};
     if (!form.username.trim()) errs.username = "Username không được trống";
     if (!form.hoTen.trim()) errs.hoTen = "Họ tên không được trống";
-    if (!form.vaiTro) errs.vaiTro = "Chọn vai trò";
+    if (isAdmin && !form.vaiTro) errs.vaiTro = "Chọn vai trò";
 
     if (mode === "add") {
       if (!form.password || form.password.length < 6) errs.password = "Mật khẩu tối thiểu 6 ký tự";
     } else {
-      // edit: nếu nhập mật khẩu mới thì cũng phải >= 6
       if (form.password && form.password.length < 6) errs.password = "Mật khẩu mới tối thiểu 6 ký tự";
     }
 
@@ -8297,33 +8492,48 @@ const StaffManagement = () => {
     setSaving(true);
     try {
       if (mode === "add") {
-        // ✅ đúng với authRoutes.js bạn gửi: POST /auth/create {username,password,hoTen,vaiTro}
-        const payload = {
-          username: form.username.trim(),
-          password: form.password,
-          hoTen: form.hoTen.trim(),
-          vaiTro: form.vaiTro,
-        };
-
-        await apiPostWithFallback("/auth/create", "/users", payload);
+        if (isAdmin) {
+          // Admin tạo User/Manage
+          const payload = {
+            username: form.username.trim(),
+            password: form.password,
+            hoTen: form.hoTen.trim(),
+            vaiTro: form.vaiTro, // User | Manage
+          };
+          await api.post("/users", payload);
+        } else {
+          // Manage chỉ tạo User
+          const payload = {
+            username: form.username.trim(),
+            password: form.password,
+            hoTen: form.hoTen.trim(),
+          };
+          await api.post("/users/managed", payload);
+        }
         alert("✅ Tạo nhân viên thành công!");
       } else {
-        // update (đặt theo pattern phổ biến)
-        // payload update: cho phép sửa username/hoTen/vaiTro, password nếu có nhập
-        const payload = {
-          username: form.username.trim(),
-          hoTen: form.hoTen.trim(),
-          vaiTro: form.vaiTro,
-          ...(form.password ? { password: form.password } : {}),
-        };
-
         const id = editing?.id;
         if (!id) {
           alert("❌ Không xác định được mã nhân viên để cập nhật.");
           return;
         }
 
-        await apiPutWithFallback(`/users/${id}`, `/staff/${id}`, payload);
+        if (isAdmin) {
+          const payload = {
+            username: form.username.trim(),
+            hoTen: form.hoTen.trim(),
+            vaiTro: form.vaiTro,
+            ...(form.password ? { password: form.password } : {}),
+          };
+          await api.put(`/users/${id}`, payload);
+        } else {
+          const payload = {
+            username: form.username.trim(),
+            hoTen: form.hoTen.trim(),
+            ...(form.password ? { password: form.password } : {}),
+          };
+          await api.put(`/users/managed/${id}`, payload);
+        }
         alert("✅ Cập nhật nhân viên thành công!");
       }
 
@@ -8343,10 +8553,16 @@ const StaffManagement = () => {
     const id = row?.id;
     if (!id) return alert("❌ Không xác định được mã nhân viên để xóa.");
 
+    if (String(row?.vaiTro) === "Admin") {
+      return alert("❌ Không được xóa tài khoản Admin.");
+    }
+
     if (!window.confirm(`Bạn chắc chắn muốn XÓA nhân viên "${row.hoTen}" (ID: ${id})?`)) return;
 
     try {
-      await apiDeleteWithFallback(`/users/${id}`, `/staff/${id}`);
+      if (isAdmin) await api.delete(`/users/${id}`);
+      else await api.delete(`/users/managed/${id}`);
+
       alert("✅ Đã xóa nhân viên!");
       fetchStaff();
     } catch (err) {
@@ -8360,7 +8576,12 @@ const StaffManagement = () => {
     const term = searchTerm.trim().toLowerCase();
 
     return staff.filter((s) => {
-      if (roleFilter !== "ALL" && String(s.vaiTro) !== roleFilter) return false;
+      // Manage chỉ thấy User (thêm lớp chắn dù backend đã lọc)
+      if (isManage && String(s.vaiTro) !== "User") return false;
+
+      // Admin filter theo roleFilter
+      if (isAdmin && roleFilter !== "ALL" && String(s.vaiTro) !== roleFilter) return false;
+
       if (!term) return true;
 
       return (
@@ -8370,27 +8591,32 @@ const StaffManagement = () => {
         String(s.vaiTro).toLowerCase().includes(term)
       );
     });
-  }, [staff, searchTerm, roleFilter]);
+  }, [staff, searchTerm, roleFilter, isAdmin, isManage]);
 
   // ========= Guard =========
-  if (!isAdmin) return <Navigate to="/" replace />;
+  if (!canAccess) return <Navigate to="/" replace />;
 
   return (
     <div style={styles.wrapper}>
       <div style={styles.headerRow}>
         <div>
-          <h1 style={styles.title}>👥 Quản lý nhân viên</h1>
+          <h1 style={styles.title}>{isAdmin ? "🔐 Phân quyền" : "👥 Quản lý nhân viên"}</h1>
           <p style={styles.subtitle}>
-            Tạo tài khoản nhân viên (User) và quản trị (Admin). Chỉ Admin được truy cập trang này.
+            {isAdmin
+              ? "Admin quản lý toàn bộ tài khoản (Manage/User), thay đổi vai trò và thông tin. (Không được xóa Admin)"
+              : "Manage chỉ quản lý tài khoản User (không cấp quyền, không đổi vai trò)."}
           </p>
         </div>
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} style={styles.select}>
-            <option value="ALL">Tất cả vai trò</option>
-            <option value="Admin">Admin</option>
-            <option value="User">User</option>
-          </select>
+          {isAdmin && (
+            <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} style={styles.select}>
+              <option value="ALL">Tất cả vai trò</option>
+              <option value="Admin">Admin</option>
+              <option value="Manage">Manage</option>
+              <option value="User">User</option>
+            </select>
+          )}
 
           <div style={{ position: "relative" }}>
             <input
@@ -8400,11 +8626,7 @@ const StaffManagement = () => {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
             {searchTerm && (
-              <button
-                style={styles.clearBtn}
-                title="Xóa tìm kiếm"
-                onClick={() => setSearchTerm("")}
-              >
+              <button style={styles.clearBtn} title="Xóa tìm kiếm" onClick={() => setSearchTerm("")}>
                 ✕
               </button>
             )}
@@ -8469,9 +8691,12 @@ const StaffManagement = () => {
                       <button style={styles.btnEdit} onClick={() => openEditModal(s)}>
                         ✏️ Sửa
                       </button>
-                      <button style={styles.btnDelete} onClick={() => handleDelete(s)}>
-                        🗑️ Xóa
-                      </button>
+
+                      {String(s.vaiTro) !== "Admin" && (
+                        <button style={styles.btnDelete} onClick={() => handleDelete(s)}>
+                          🗑️ Xóa
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -8509,20 +8734,27 @@ const StaffManagement = () => {
                   {errors.username && <div style={styles.errorText}>{errors.username}</div>}
                 </div>
 
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>Vai trò</label>
-                  <select
-                    name="vaiTro"
-                    value={form.vaiTro}
-                    onChange={handleChange}
-                    style={styles.input}
-                    disabled={saving}
-                  >
-                    <option value="User">User (Nhân viên)</option>
-                    <option value="Admin">Admin (Chủ khách sạn)</option>
-                  </select>
-                  {errors.vaiTro && <div style={styles.errorText}>{errors.vaiTro}</div>}
-                </div>
+                {isAdmin ? (
+                  <div style={styles.formGroup}>
+                    <label style={styles.label}>Vai trò</label>
+                    <select
+                      name="vaiTro"
+                      value={form.vaiTro}
+                      onChange={handleChange}
+                      style={styles.input}
+                      disabled={saving}
+                    >
+                      <option value="User">User (Nhân viên)</option>
+                      <option value="Manage">Manage (Quản lý)</option>
+                    </select>
+                    {errors.vaiTro && <div style={styles.errorText}>{errors.vaiTro}</div>}
+                  </div>
+                ) : (
+                  <div style={styles.formGroup}>
+                    <label style={styles.label}>Vai trò</label>
+                    <input value="User (Nhân viên)" disabled style={styles.input} />
+                  </div>
+                )}
 
                 <div style={styles.formGroup}>
                   <label style={styles.label}>Họ tên</label>
@@ -8539,7 +8771,8 @@ const StaffManagement = () => {
 
                 <div style={styles.formGroup}>
                   <label style={styles.label}>
-                    Mật khẩu {mode === "edit" ? <span style={{ color: "#64748b" }}>(bỏ trống nếu không đổi)</span> : null}
+                    Mật khẩu{" "}
+                    {mode === "edit" ? <span style={{ color: "#64748b" }}>(bỏ trống nếu không đổi)</span> : null}
                   </label>
                   <input
                     name="password"
@@ -8564,8 +8797,15 @@ const StaffManagement = () => {
               </div>
 
               <div style={styles.hintBox}>
-                <b>Lưu ý:</b> Trang này dùng endpoint ưu tiên <code>/users</code> (list/update/delete) và{" "}
-                <code>/auth/create</code> (create). Nếu backend bạn đang dùng <code>/staff</code> thì file này tự fallback.
+                <b>Lưu ý:</b> Trang này dùng:
+                <ul style={{ margin: "8px 0 0 18px" }}>
+                  <li>
+                    Admin: <code>/users</code>
+                  </li>
+                  <li>
+                    Manage: <code>/users/managed</code>
+                  </li>
+                </ul>
               </div>
             </form>
           </div>
@@ -8622,7 +8862,7 @@ const styles = {
     color: "white",
     cursor: "pointer",
     fontWeight: 700,
-    boxShadow: "0 10px 18px rgba(58,125,255,0.25)",
+    boxShadow: "0 10px 18px rgba(58, 125, 255, 0.25)",
     whiteSpace: "nowrap",
   },
 
@@ -8760,7 +9000,7 @@ const styles = {
     color: "white",
     cursor: "pointer",
     fontWeight: 900,
-    boxShadow: "0 10px 18px rgba(58,125,255,0.25)",
+    boxShadow: "0 10px 18px rgba(58, 125, 255, 0.25)",
   },
 
   hintBox: {
@@ -8776,20 +9016,23 @@ const styles = {
 };
 
 const roleBadgeStyle = (role) => {
-  const isAdmin = role === "Admin";
+  const r = String(role);
+  const isAdmin = r === "Admin";
+  const isManage = r === "Manage";
   return {
     display: "inline-block",
     padding: "4px 10px",
     borderRadius: 999,
     fontWeight: 900,
     fontSize: 12,
-    background: isAdmin ? "#ede9fe" : "#dcfce7",
-    color: isAdmin ? "#6d28d9" : "#15803d",
-    border: isAdmin ? "1px solid #ddd6fe" : "1px solid #bbf7d0",
+    background: isAdmin ? "#ede9fe" : isManage ? "#ffedd5" : "#dcfce7",
+    color: isAdmin ? "#6d28d9" : isManage ? "#9a3412" : "#15803d",
+    border: isAdmin ? "1px solid #ddd6fe" : isManage ? "1px solid #fed7aa" : "1px solid #bbf7d0",
   };
 };
 
 export default StaffManagement;
+
 ```
 
 ### frontend\src\services\api.js
