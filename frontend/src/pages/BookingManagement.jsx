@@ -319,6 +319,10 @@ const BookingManagement = () => {
         alert(`❌ Khách hàng #${i + 1} chưa chọn Loại khách!`);
         return;
       }
+      if (!k.CMND || !k.CMND.trim()) {
+        alert(`❌ Khách hàng #${i + 1} bắt buộc phải nhập số CMND/CCCD để định danh!`);
+        return;
+      }
     }
 
     const ngayDen = new Date(form.NgayBatDauThue);
