@@ -97,8 +97,7 @@ quan-ly-khach-san-se104/
 │   └── vite.config.js
 ├── .gitignore
 ├── README.md
-├── package-lock.json
-└── source_dump.txt
+└── package-lock.json
 ```
 
 ## FILE CONTENTS
@@ -449,6 +448,16 @@ const calculateBill = async (soPhieu) => {
     const [rows] = await db.promise().query(sqlBase, [soPhieu]);
     if (rows.length === 0) throw new Error("Phiếu thuê không tồn tại");
     const data = rows[0];
+    const ngayBatDau = new Date(data.NgayBatDauThue);
+    const homNay = new Date();
+    homNay.setHours(0, 0, 0, 0); // Reset giờ để so sánh ngày
+    ngayBatDau.setHours(0, 0, 0, 0);
+
+    if (homNay < ngayBatDau) {
+        return res.status(400).json({ 
+            message: `Phiếu này bắt đầu ngày ${data.NgayBatDauThue}. Chưa đến ngày nhận phòng nên không thể tính tiền!` 
+        });
+    }
 
     // 2. Đếm số khách thực tế
     const sqlKhach = `
@@ -462,7 +471,6 @@ const calculateBill = async (soPhieu) => {
     const soLuongKhach = dsKhach.length;
 
     // 3. Tính số ngày
-    const ngayBatDau = new Date(data.NgayBatDauThue);
     const ngayKetThuc = data.NgayDuKienTra ? new Date(data.NgayDuKienTra) : new Date(); 
     let soNgay = Math.ceil((Math.abs(ngayKetThuc - ngayBatDau)) / (1000 * 60 * 60 * 24));
     if (soNgay <= 0) soNgay = 1;
@@ -2320,7 +2328,8 @@ Bảng phieuthue(
   MaPhong,
   NgayBatDauThue,
   NgayDuKienTra,
-  TrangThaiLuuTru
+  TrangThaiLuuTru,
+  TenPhong_LuuTru
 )
 
 TrangThaiLuuTru gồm:
@@ -2328,14 +2337,22 @@ TrangThaiLuuTru gồm:
 - 'DA_TRA_PHONG'
 - 'DA_HUY'
 - 'DA_THANH_TOAN'
-
+Bảng ct_phieuthue(
+  SoPhieu,
+  MaKH
+)
 Bảng khachhang(
   MaKH,
   HoTen,
   CMND,
-  SDT
+  SDT,
+  DiaChi,
+  MaLoaiKhach
 )
-
+Bảng loaikhach(
+  MaLoaiKhach,
+  TenLoaiKhach
+)
 Bảng hoadon(
   SoHoaDon,
   NgayLap,
@@ -2391,6 +2408,7 @@ Bảng ct_baocao(
 - Lấy từ ct_baocao
 - Join với baocao qua MaBaoCao
 - Có thể lọc theo Thang, Nam
+6. Khách đang thuê phòng:
 
 ===== QUY TẮC BẮT BUỘC =====
 - CHỈ sinh SQL SELECT
@@ -3102,6 +3120,16 @@ const BookingManagement = () => {
   const [billPreview, setBillPreview] = useState(null);
   const [tienKhachDua, setTienKhachDua] = useState("");
 
+  const getTodayString = () => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+  
+  const minDate = getTodayString();
+
   /* =====================
       LOAD DATA
   ===================== */
@@ -3360,6 +3388,18 @@ const BookingManagement = () => {
     const ngayDen = new Date(form.NgayBatDauThue);
     const ngayTra = new Date(form.NgayDuKienTra);
 
+    const todayZero = new Date();
+    todayZero.setHours(0, 0, 0, 0); // Đặt về 0h sáng nay để so sánh
+
+    if (modalMode === "create") {
+        // Có thể dùng < thay vì <= vì ngày hiện tại vẫn được phép
+        // Nhưng do múi giờ, tốt nhất so sánh getTime() hoặc reset giờ như trên
+        if (ngayDen < todayZero) {
+             alert("❌ Ngày bắt đầu thuê không được chọn ngày trong quá khứ!");
+             return;
+        }
+    }
+
     if (ngayTra <= ngayDen) {
       return alert("❌ Ngày dự kiến trả phải SAU ngày bắt đầu thuê!");
     }
@@ -3581,6 +3621,13 @@ const BookingManagement = () => {
                 const trangThai = b.TrangThaiLuuTru || "DANG_THUE";
                 const isDangThue = trangThai === "DANG_THUE";
 
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                const startDate = new Date(b.NgayBatDauThue);
+                startDate.setHours(0,0,0,0);
+
+                const isFuture = startDate > today;
+                
                 return (
                   <tr
                     key={b.SoPhieu}
@@ -3634,7 +3681,7 @@ const BookingManagement = () => {
                           </button>
                         )}
 
-                        {isDangThue && (
+                        {isDangThue && !isFuture && (
                           <button
                             style={{
                               ...styles.actionBtn,
@@ -3729,6 +3776,7 @@ const BookingManagement = () => {
                       value={form.NgayBatDauThue}
                       onChange={handleFormChange}
                       style={styles.input}
+                      min={minDate}
                       disabled={modalMode !== "create"}
                     />
                   </div>
