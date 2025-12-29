@@ -56,6 +56,16 @@ const BookingManagement = () => {
   const [billPreview, setBillPreview] = useState(null);
   const [tienKhachDua, setTienKhachDua] = useState("");
 
+  const getTodayString = () => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+  
+  const minDate = getTodayString();
+
   /* =====================
       LOAD DATA
   ===================== */
@@ -314,6 +324,18 @@ const BookingManagement = () => {
     const ngayDen = new Date(form.NgayBatDauThue);
     const ngayTra = new Date(form.NgayDuKienTra);
 
+    const todayZero = new Date();
+    todayZero.setHours(0, 0, 0, 0); // Đặt về 0h sáng nay để so sánh
+
+    if (modalMode === "create") {
+        // Có thể dùng < thay vì <= vì ngày hiện tại vẫn được phép
+        // Nhưng do múi giờ, tốt nhất so sánh getTime() hoặc reset giờ như trên
+        if (ngayDen < todayZero) {
+             alert("❌ Ngày bắt đầu thuê không được chọn ngày trong quá khứ!");
+             return;
+        }
+    }
+
     if (ngayTra <= ngayDen) {
       return alert("❌ Ngày dự kiến trả phải SAU ngày bắt đầu thuê!");
     }
@@ -541,7 +563,7 @@ const BookingManagement = () => {
                 startDate.setHours(0,0,0,0);
 
                 const isFuture = startDate > today;
-
+                
                 return (
                   <tr
                     key={b.SoPhieu}
@@ -690,6 +712,7 @@ const BookingManagement = () => {
                       value={form.NgayBatDauThue}
                       onChange={handleFormChange}
                       style={styles.input}
+                      min={minDate}
                       disabled={modalMode !== "create"}
                     />
                   </div>
