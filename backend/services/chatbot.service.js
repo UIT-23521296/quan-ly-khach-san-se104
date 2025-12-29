@@ -132,7 +132,8 @@ Bảng phieuthue(
   MaPhong,
   NgayBatDauThue,
   NgayDuKienTra,
-  TrangThaiLuuTru
+  TrangThaiLuuTru,
+  TenPhong_LuuTru
 )
 
 TrangThaiLuuTru gồm:
@@ -140,14 +141,22 @@ TrangThaiLuuTru gồm:
 - 'DA_TRA_PHONG'
 - 'DA_HUY'
 - 'DA_THANH_TOAN'
-
+Bảng ct_phieuthue(
+  SoPhieu,
+  MaKH
+)
 Bảng khachhang(
   MaKH,
   HoTen,
   CMND,
-  SDT
+  SDT,
+  DiaChi,
+  MaLoaiKhach
 )
-
+Bảng loaikhach(
+  MaLoaiKhach,
+  TenLoaiKhach
+)
 Bảng hoadon(
   SoHoaDon,
   NgayLap,
@@ -203,6 +212,7 @@ Bảng ct_baocao(
 - Lấy từ ct_baocao
 - Join với baocao qua MaBaoCao
 - Có thể lọc theo Thang, Nam
+6. Khách đang thuê phòng:
 
 ===== QUY TẮC BẮT BUỘC =====
 - CHỈ sinh SQL SELECT
