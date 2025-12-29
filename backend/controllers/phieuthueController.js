@@ -32,10 +32,41 @@ exports.createPhieuThue = async (req, res) => {
     ]);
 
     // Insert Khách
-    for (const k of danhSachKhach) {
-      const MaKH = uuidv4();
-      await phieuThueModel.insertKhachHang([MaKH, k.HoTen, k.MaLoaiKhach, k.CMND, k.DiaChi, k.SDT]);
-      await phieuThueModel.insertCTPhieuThue([SoPhieu, MaKH]);
+    for (const kh of danhSachKhach) {
+        let maKhachHang = null;
+
+        // B1: Kiểm tra xem CMND này đã có trong DB chưa
+        const [existingGuests] = await conn.query(
+            "SELECT MaKH FROM khachhang WHERE CMND = ?", 
+            [kh.CMND]
+        );
+
+        if (existingGuests.length > 0) {
+            // ==> ĐÃ TỒN TẠI: Lấy MaKH cũ và cập nhật thông tin mới nhất (nếu có thay đổi)
+            maKhachHang = existingGuests[0].MaKH;
+            
+            await conn.query(
+                `UPDATE khachhang 
+                 SET HoTen = ?, DiaChi = ?, SDT = ?, MaLoaiKhach = ? 
+                 WHERE MaKH = ?`,
+                [kh.HoTen, kh.DiaChi, kh.SDT, kh.MaLoaiKhach, maKhachHang]
+            );
+        } else {
+            // ==> CHƯA TỒN TẠI: Tạo MaKH mới và Insert
+            maKhachHang = uuidv4(); 
+            
+            await conn.query(
+                `INSERT INTO khachhang (MaKH, HoTen, MaLoaiKhach, CMND, DiaChi, SDT) 
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [maKhachHang, kh.HoTen, kh.MaLoaiKhach, kh.CMND, kh.DiaChi, kh.SDT]
+            );
+        }
+
+        // B2: Gắn khách vào phiếu thuê (Bảng chi tiết)
+        await conn.query(
+            "INSERT INTO ct_phieuthue (SoPhieu, MaKH) VALUES (?, ?)", 
+            [SoPhieu, maKhachHang]
+        );
     }
 
     // Cập nhật phòng -> Đã thuê
